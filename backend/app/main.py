@@ -8,10 +8,14 @@ app = FastAPI(
     version="1.0.0"
 )
 
-# Enable CORS for React Vite frontend
+import os
+
+# Enable CORS for React Vite frontend with environment support
+allowed_origins = os.getenv("ALLOWED_ORIGINS", "*").split(",")
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=allowed_origins if allowed_origins != ["*"] else ["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -26,6 +30,14 @@ def root():
         "service": "ETABS to RAM Concept Floor Extraction Engine",
         "status": "online",
         "version": "1.0.0"
+    }
+
+
+@app.get("/api/health")
+def health_check():
+    return {
+        "status": "healthy",
+        "service": "ETABS to RAM Concept Floor Extraction Engine"
     }
 
 
