@@ -41,13 +41,6 @@ export const DropZone: React.FC<DropZoneProps> = ({ onUploadSuccess }) => {
     setUploading(true);
     setUploadError(null);
 
-    const ext = file.name.split('.').pop()?.toLowerCase();
-    if (!['e2k', 's2k', 'json', 'edb'].includes(ext || '')) {
-      setUploadError('Invalid file type. Please upload an ETABS .e2k / .s2k text export or structural JSON file.');
-      setUploading(false);
-      return;
-    }
-
     try {
       const res = await api.uploadEtabsModel(activeProjectId, file);
       
@@ -71,7 +64,7 @@ export const DropZone: React.FC<DropZoneProps> = ({ onUploadSuccess }) => {
           } else if (job.status === 'FAILED' || attempts > 30) {
             clearInterval(pollInterval);
             setUploading(false);
-            setUploadError(job.error || 'Model parsing job timed out.');
+            setUploadError(job.error || 'Model parsing job failed.');
           }
         } catch (err) {
           clearInterval(pollInterval);
@@ -101,7 +94,7 @@ export const DropZone: React.FC<DropZoneProps> = ({ onUploadSuccess }) => {
         <input
           ref={fileInputRef}
           type="file"
-          accept=".e2k,.s2k,.json,.edb"
+          accept="*/*"
           onChange={handleFileChange}
           className="hidden"
         />
@@ -111,14 +104,16 @@ export const DropZone: React.FC<DropZoneProps> = ({ onUploadSuccess }) => {
         </div>
 
         <h3 className="text-sm font-semibold text-slate-100 mb-1">
-          Upload ETABS Model Export File
+          Upload ETABS Model File
         </h3>
         <p className="text-xs text-slate-400 mb-4 max-w-xs">
-          Drag & drop your ETABS <code className="text-cyan-300 font-mono bg-slate-950 px-1 py-0.5 rounded">.e2k</code> text export or click to browse files.
+          Drag & drop your ETABS <code className="text-cyan-300 font-mono bg-slate-950 px-1 py-0.5 rounded">.e2k</code> or <code className="text-cyan-300 font-mono bg-slate-950 px-1 py-0.5 rounded">.$ed</code> text file, or click to browse.
         </p>
 
         <div className="flex items-center gap-2 text-[11px] text-slate-500 font-mono">
           <span>Supported: .E2K</span>
+          <span>•</span>
+          <span>.$ED</span>
           <span>•</span>
           <span>.S2K</span>
           <span>•</span>

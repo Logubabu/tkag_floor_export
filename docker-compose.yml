@@ -1,22 +1,16 @@
 version: '3.8'
+name: floor_exporter
 
 services:
-  backend:
+  app:
+    container_name: floor_exporter_app
     build:
-      context: ./backend
-      dockerfile: ../docker/Dockerfile.backend
+      context: .
+      dockerfile: Dockerfile
     ports:
       - "8080:8080"
     environment:
       - PORT=8080
+      - ALLOWED_ORIGINS=*
     volumes:
       - ./backend/data:/app/data
-
-  frontend:
-    build:
-      context: ./frontend
-      dockerfile: ../docker/Dockerfile.frontend
-    ports:
-      - "3000:80"
-    depends_on:
-      - backend

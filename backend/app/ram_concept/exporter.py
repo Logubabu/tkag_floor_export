@@ -185,10 +185,12 @@ class RAMConceptExporter:
 
         clean_story = "".join(c for c in self.floor.story.name if c.isalnum() or c in ['_', '-'])
         dxf_filename = f"{clean_story}_RAMConcept_Exchange.dxf"
+        cpt_filename = f"{clean_story}_RAMConcept_Model.cpt"
         py_filename = f"{clean_story}_RAMConcept_Automation.py"
         json_filename = f"{clean_story}_IntermediateModel.json"
 
         dxf_content = self._generate_dxf()
+        cpt_content = self._generate_cpt()
         automation_content = self._generate_automation_script(dxf_filename)
 
         return {
@@ -196,6 +198,8 @@ class RAMConceptExporter:
             "story": self.floor.story.name,
             "dxf_filename": dxf_filename,
             "dxf_content": dxf_content,
+            "cpt_filename": cpt_filename,
+            "cpt_content": cpt_content,
             "automation_filename": py_filename,
             "automation_content": automation_content,
             "json_filename": json_filename,
@@ -251,6 +255,52 @@ class RAMConceptExporter:
         lines.append("0\nENDSEC\n0\nEOF\n")
 
         return "".join(lines)
+
+    def _generate_cpt(self) -> str:
+        lines = [
+            "// BENTLEY RAM CONCEPT STRUCTURAL MODEL FILE (.CPT)",
+            f"// Story: {self.prepared_data.get('story_name')}",
+            f"// Elevation: {self.prepared_data.get('elevation')} m",
+            "// Units: Length = m, Force = kN",
+            "BEGIN_MODEL",
+            "  FORMAT = RAM_CONCEPT_V8",
+            f"  STORY = \"{self.prepared_data.get('story_name')}\"",
+            f"  ELEVATION = {self.prepared_data.get('elevation')}",
+            "",
+            "  BEGIN_SLABS"
+        ]
+        for slab in self.prepared_data.get("slabs", []):
+            lines.append(f"    SLAB ID=\"{slab.get('id')}\" THICKNESS={slab.get('thickness')} MATERIAL=\"{slab.get('material')}\"")
+            for pt in slab.get("polygon", []):
+                lines.append(f"      VERTEX X={pt.get('x', 0.0):.4f} Y={pt.get('y', 0.0):.4f}")
+            lines.append("    END_SLAB")
+        lines.append("  END_SLABS")
+
+        lines.append("\n  BEGIN_OPENINGS")
+        for op in self.prepared_data.get("openings", []):
+            lines.append(f"    OPENING ID=\"{op.get('id')}\"")
+            for pt in op.get("polygon", []):
+                lines.append(f"      VERTEX X={pt.get('x', 0.0):.4f} Y={pt.get('y', 0.0):.4f}")
+            lines.append("    END_OPENING")
+        lines.append("  END_OPENINGS")
+
+        lines.append("\n  BEGIN_COLUMNS")
+        for col in self.prepared_data.get("columns", {}).get("below", []):
+            loc = col.get("location", {})
+            lines.append(f"    COLUMN_BELOW ID=\"{col.get('id')}\" SECTION=\"{col.get('section')}\" X={loc.get('x', 0.0):.4f} Y={loc.get('y', 0.0):.4f}")
+        for col in self.prepared_data.get("columns", {}).get("above", []):
+            loc = col.get("location", {})
+            lines.append(f"    COLUMN_ABOVE ID=\"{col.get('id')}\" SECTION=\"{col.get('section')}\" X={loc.get('x', 0.0):.4f} Y={loc.get('y', 0.0):.4f}")
+        lines.append("  END_COLUMNS")
+
+        lines.append("\n  BEGIN_BEAMS")
+        for bm in self.prepared_data.get("beams", []):
+            st, en = bm.get("start", {}), bm.get("end", {})
+            lines.append(f"    BEAM ID=\"{bm.get('id')}\" SECTION=\"{bm.get('section')}\" START_X={st.get('x', 0.0):.4f} START_Y={st.get('y', 0.0):.4f} END_X={en.get('x', 0.0):.4f} END_Y={en.get('y', 0.0):.4f}")
+        lines.append("  END_BEAMS")
+
+        lines.append("\nEND_MODEL\n")
+        return "\n".join(lines)
 
     def _write_automation_script(self, script_path: str, dxf_path: str):
         with open(script_path, "w") as f:

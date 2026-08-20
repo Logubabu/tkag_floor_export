@@ -53,3 +53,6 @@ build/
 dist/
 *.egg-info/
 *.egg
+
+#sample files
+sample_models/

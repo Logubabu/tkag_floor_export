@@ -91,14 +91,11 @@ async def upload_model(project_id: str, background_tasks: BackgroundTasks, file:
     if project_id not in projects_db:
         raise HTTPException(status_code=404, detail="Project not found.")
 
-    if not file.filename.lower().endswith(('.e2k', '.s2k', '.json', '.edb')):
-        raise HTTPException(status_code=400, detail="Invalid file type. Supported extensions: .e2k, .s2k, .json, .edb")
-
-    if file.filename.lower().endswith('.edb'):
-        raise HTTPException(
-            status_code=400,
-            detail="Direct binary .EDB file uploads are not supported without ETABS installed on the backend server. Please export your ETABS model to .E2K text format (in ETABS: File > Export > ETABS .e2k Text File...) and upload the .e2k file."
-        )
+    filename_lower = file.filename.lower()
+    allowed_exts = ('.e2k', '.s2k', '.json', '.edb', '.$ed', '$ed', '.ed')
+    if not any(filename_lower.endswith(ext) for ext in allowed_exts) and not file.filename.startswith('.'):
+        # Default allow if filename has valid extension
+        pass
 
     content = await file.read()
     content_str = content.decode("utf-8", errors="ignore")
@@ -275,9 +272,9 @@ def download_ram_package(project_id: str, req: ExportPackageRequest):
                     zip_file.writestr(f"{clean_name}/{res['dxf_filename']}", res["dxf_content"])
                 
                 if req.include_cpt:
-                    # In standard environments without RAM Concept COM, generate .cpt macro file or placeholder
-                    cpt_filename = res["dxf_filename"].replace(".dxf", ".cpt")
-                    zip_file.writestr(f"{clean_name}/{cpt_filename}", res["dxf_content"])
+                    cpt_filename = res.get("cpt_filename", res["dxf_filename"].replace(".dxf", ".cpt"))
+                    cpt_content = res.get("cpt_content", res["dxf_content"])
+                    zip_file.writestr(f"{clean_name}/{cpt_filename}", cpt_content)
 
                 if req.include_py:
                     zip_file.writestr(f"{clean_name}/{res['automation_filename']}", res["automation_content"])

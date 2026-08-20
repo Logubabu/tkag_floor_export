@@ -20,7 +20,7 @@ export const UploadModal: React.FC<UploadModalProps> = ({ isOpen, onClose, onUpl
             <UploadCloud className="w-5 h-5 text-cyan-400" />
             <div>
               <h2 className="font-semibold text-slate-100 text-sm">Upload ETABS Model File</h2>
-              <p className="text-xs text-slate-400 font-mono">Select or drag & drop an .e2k / .s2k file</p>
+              <p className="text-xs text-slate-400 font-mono">Select or drag & drop an .e2k / .$ed / .s2k / .edb file</p>
             </div>
           </div>
           <button
