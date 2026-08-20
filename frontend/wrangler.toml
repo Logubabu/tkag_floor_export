@@ -5,8 +5,8 @@ compatibility_date = "2024-09-25"
 [assets]
 directory = "./dist"
 binding = "ASSETS"
-html_handling = "single-page-app"
-not_found_handling = "single-page-app"
+html_handling = "auto-trailing-slash"
+not_found_handling = "single-page-application"
 
 [env.staging]
 name = "etabs-ram-floor-exporter-staging"
