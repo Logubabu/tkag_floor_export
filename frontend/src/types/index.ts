@@ -37,6 +37,7 @@ export interface Frame {
   section: string;
   story: string;
   material?: string;
+  color?: string;
 }
 
 export interface Slab {
@@ -48,6 +49,7 @@ export interface Slab {
   is_opening: boolean;
   material?: string;
   elevation: number;
+  color?: string;
 }
 
 export interface Wall {
@@ -59,6 +61,7 @@ export interface Wall {
   material?: string;
   top_z: number;
   bottom_z: number;
+  color?: string;
 }
 
 export interface AreaLoad {

@@ -7,6 +7,9 @@ import { ExtractionModal } from '../components/ExtractionModal';
 import { ValidationCard } from '../components/ValidationCard';
 import { ExportModal } from '../components/ExportModal';
 import { UploadModal } from '../components/UploadModal';
+import { VisualComparisonModal } from '../components/VisualComparisonModal';
+import { RAMConceptViewerModal } from '../components/RAMConceptViewerModal';
+import { ExportedFilesViewerModal } from '../components/ExportedFilesViewerModal';
 import { useStore } from '../store/useStore';
 import { api } from '../services/api';
 import { Story, ExtractionMode } from '../types';
@@ -21,6 +24,8 @@ export const ModelViewerPage: React.FC<ModelViewerPageProps> = () => {
     setStories,
     setSelectedStory,
     setFloorModel,
+    setFullBuildingModel,
+    setViewMode,
     setValidationResult,
     setIsExtracting,
   } = useStore();
@@ -29,23 +34,32 @@ export const ModelViewerPage: React.FC<ModelViewerPageProps> = () => {
   const [isExtractionOpen, setIsExtractionOpen] = useState(false);
   const [isValidationOpen, setIsValidationOpen] = useState(false);
   const [isExportOpen, setIsExportOpen] = useState(false);
+  const [isComparisonOpen, setIsComparisonOpen] = useState(false);
+  const [isRamViewerOpen, setIsRamViewerOpen] = useState(false);
+  const [isExportedFilesOpen, setIsExportedFilesOpen] = useState(false);
 
-  // Load project stories on mount
-  useEffect(() => {
-    async function loadData() {
-      try {
-        const fetchedStories = await api.getStories(activeProjectId);
-        setStories(fetchedStories);
-        if (fetchedStories.length > 0) {
-          const firstStory = fetchedStories[0];
-          setSelectedStory(firstStory);
-          await runFloorExtraction(firstStory, 'Mode B — Slab + Supporting Elements');
-        }
-      } catch (err) {
-        console.error('Failed to load initial project stories:', err);
+  const loadFullModelAndStories = async () => {
+    try {
+      const fetchedStories = await api.getStories(activeProjectId);
+      setStories(fetchedStories);
+
+      const bModel = await api.getBuildingModel(activeProjectId);
+      setFullBuildingModel(bModel);
+      setViewMode('full');
+
+      if (fetchedStories.length > 0) {
+        const firstStory = fetchedStories[0];
+        setSelectedStory(firstStory);
+        await runFloorExtraction(firstStory, 'Mode B — Slab + Supporting Elements');
       }
+    } catch (err) {
+      console.error('Failed to load full building model or stories:', err);
     }
-    loadData();
+  };
+
+  // Load project stories & building model on mount
+  useEffect(() => {
+    loadFullModelAndStories();
   }, [activeProjectId]);
 
   const runFloorExtraction = async (story: Story, mode: ExtractionMode) => {
@@ -67,6 +81,7 @@ export const ModelViewerPage: React.FC<ModelViewerPageProps> = () => {
 
   const handleSelectFloor = async (story: Story) => {
     setSelectedStory(story);
+    setViewMode('floor');
     const { extractionMode } = useStore.getState();
     await runFloorExtraction(story, extractionMode);
   };
@@ -80,17 +95,7 @@ export const ModelViewerPage: React.FC<ModelViewerPageProps> = () => {
   };
 
   const handleUploadSuccess = async () => {
-    try {
-      const fetchedStories = await api.getStories(activeProjectId);
-      setStories(fetchedStories);
-      if (fetchedStories.length > 0) {
-        const firstStory = fetchedStories[0];
-        setSelectedStory(firstStory);
-        await runFloorExtraction(firstStory, 'Mode B — Slab + Supporting Elements');
-      }
-    } catch (err) {
-      console.error('Error refreshing stories after upload:', err);
-    }
+    await loadFullModelAndStories();
   };
 
   return (
@@ -101,12 +106,18 @@ export const ModelViewerPage: React.FC<ModelViewerPageProps> = () => {
         onOpenExtractionModal={() => setIsExtractionOpen(true)}
         onOpenValidationModal={() => setIsValidationOpen(true)}
         onOpenExportModal={() => setIsExportOpen(true)}
+        onOpenComparisonModal={() => setIsComparisonOpen(true)}
+        onOpenRamViewerModal={() => setIsRamViewerOpen(true)}
+        onOpenExportedFilesModal={() => setIsExportedFilesOpen(true)}
       />
 
       {/* Main Engineering Workbench */}
       <div className="flex-1 flex overflow-hidden">
         {/* Left Sidebar: Floor Hierarchy & Layer Controls */}
-        <FloorTree onSelectFloor={handleSelectFloor} />
+        <FloorTree
+          onSelectFloor={handleSelectFloor}
+          onExportFloor={() => setIsExportOpen(true)}
+        />
 
         {/* Center Viewport: Interactive 3D Three.js Model */}
         <div className="flex-1 relative h-full">
@@ -138,6 +149,23 @@ export const ModelViewerPage: React.FC<ModelViewerPageProps> = () => {
       <ExportModal
         isOpen={isExportOpen}
         onClose={() => setIsExportOpen(false)}
+      />
+
+      <VisualComparisonModal
+        isOpen={isComparisonOpen}
+        onClose={() => setIsComparisonOpen(false)}
+        comparisonData={null}
+      />
+
+      <RAMConceptViewerModal
+        isOpen={isRamViewerOpen}
+        onClose={() => setIsRamViewerOpen(false)}
+        onConfirmExport={() => setIsExportOpen(true)}
+      />
+
+      <ExportedFilesViewerModal
+        isOpen={isExportedFilesOpen}
+        onClose={() => setIsExportedFilesOpen(false)}
       />
     </div>
   );

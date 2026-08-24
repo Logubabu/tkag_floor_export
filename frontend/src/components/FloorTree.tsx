@@ -1,13 +1,15 @@
 import React from 'react';
-import { Layers, ChevronRight, Crown, Box, Eye, EyeOff, CheckSquare, Square } from 'lucide-react';
+import { Layers, ChevronRight, Crown, Box, Eye, EyeOff, CheckSquare, Square, Download } from 'lucide-react';
 import { useStore } from '../store/useStore';
 import { Story } from '../types';
+import { formatLength } from '../utils/unitConverter';
 
 interface FloorTreeProps {
   onSelectFloor: (story: Story) => void;
+  onExportFloor?: (story: Story) => void;
 }
 
-export const FloorTree: React.FC<FloorTreeProps> = ({ onSelectFloor }) => {
+export const FloorTree: React.FC<FloorTreeProps> = ({ onSelectFloor, onExportFloor }) => {
   const {
     stories,
     selectedStory,
@@ -17,12 +19,41 @@ export const FloorTree: React.FC<FloorTreeProps> = ({ onSelectFloor }) => {
     deselectAllStories,
     layerVisibility,
     toggleLayerVisibility,
+    viewMode,
+    setViewMode,
+    activeUnits,
   } = useStore();
 
   const allSelected = stories.length > 0 && selectedStoryIds.length === stories.length;
 
   return (
     <aside className="w-72 bg-slate-900 border-r border-slate-800 flex flex-col h-full z-10 shrink-0">
+      {/* View Mode Toggle: Entire 3D Building vs Single Floor */}
+      <div className="p-3 border-b border-slate-800 bg-slate-950/60">
+        <div className="flex bg-slate-900 p-1 rounded-lg border border-slate-800 text-xs font-medium">
+          <button
+            onClick={() => setViewMode('full')}
+            className={`flex-1 py-1.5 rounded-md font-semibold text-center transition ${
+              viewMode === 'full'
+                ? 'bg-gradient-to-r from-cyan-600 to-blue-600 text-white shadow-md shadow-cyan-950'
+                : 'text-slate-400 hover:text-slate-200'
+            }`}
+          >
+            Entire 3D Building
+          </button>
+          <button
+            onClick={() => setViewMode('floor')}
+            className={`flex-1 py-1.5 rounded-md font-semibold text-center transition ${
+              viewMode === 'floor'
+                ? 'bg-gradient-to-r from-cyan-600 to-blue-600 text-white shadow-md shadow-cyan-950'
+                : 'text-slate-400 hover:text-slate-200'
+            }`}
+          >
+            Single Floor
+          </button>
+        </div>
+      </div>
+
       {/* Sidebar Section 1: Story Tree & Multi-Select Controls */}
       <div className="p-4 border-b border-slate-800 space-y-2">
         <div className="flex items-center justify-between">
@@ -59,7 +90,7 @@ export const FloorTree: React.FC<FloorTreeProps> = ({ onSelectFloor }) => {
               key={story.id}
               className={`w-full flex items-center justify-between px-3 py-2 rounded-lg text-xs font-medium transition group border ${
                 is3DActive
-                  ? 'bg-gradient-to-r from-cyan-950 to-slate-850 text-cyan-300 border-cyan-800/60 shadow'
+                  ? 'bg-gradient-to-r from-cyan-900 to-blue-900 text-white border-cyan-400 shadow-lg shadow-cyan-950/60 ring-2 ring-cyan-500/40 font-bold'
                   : 'bg-slate-950/40 text-slate-400 border-slate-850 hover:border-slate-750'
               }`}
             >
@@ -96,7 +127,24 @@ export const FloorTree: React.FC<FloorTreeProps> = ({ onSelectFloor }) => {
                 </div>
 
                 <div className="flex items-center gap-2">
-                  <span className="text-[11px] font-mono text-slate-400">{story.elevation} m</span>
+                  <span className="text-[11px] font-mono text-slate-400">
+                    {formatLength(story.elevation, activeUnits.length)}
+                  </span>
+                  {onExportFloor && (
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        if (!selectedStoryIds.includes(story.id)) {
+                          toggleStorySelection(story.id);
+                        }
+                        onExportFloor(story);
+                      }}
+                      className="p-1 rounded text-slate-400 hover:text-cyan-300 hover:bg-slate-800/80 transition"
+                      title={`Export ${story.name} (DXF / CPT / PY)`}
+                    >
+                      <Download className="w-3.5 h-3.5" />
+                    </button>
+                  )}
                   <ChevronRight
                     className={`w-3.5 h-3.5 transition-transform ${
                       is3DActive ? 'rotate-90 text-cyan-400' : 'text-slate-600 group-hover:text-slate-400'

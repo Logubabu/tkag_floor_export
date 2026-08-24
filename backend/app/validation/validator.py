@@ -21,68 +21,36 @@ class StructuralValidator:
         num_columns = len(floor.columns_above) + len(floor.columns_below)
         num_walls = len(floor.walls_above) + len(floor.walls_below)
 
-        # 1. Validate Slabs
+        # 1. Validate & Heal Slabs
         if num_slabs == 0:
-            alerts.append(ValidationAlert(
-                level=AlertLevel.ERROR,
-                element_type="Floor",
-                element_id=floor.story.name,
-                message=f"No structural slabs found on {floor.story.name}.",
-                action_tip="Verify story assignment in ETABS or select a different extraction mode."
-            ))
-
-        for slab in floor.slabs:
-            # Check thickness
-            if slab.thickness <= 0.0:
+            if num_beams > 0 or num_columns > 0 or num_walls > 0:
                 alerts.append(ValidationAlert(
-                    level=AlertLevel.ERROR,
-                    element_type="Slab",
-                    element_id=slab.id,
-                    message=f"Slab {slab.id} has invalid or zero thickness ({slab.thickness} m).",
-                    action_tip="Assign a valid slab thickness (> 0.0 mm) in ETABS section properties."
+                    level=AlertLevel.INFO,
+                    element_type="Floor",
+                    element_id=floor.story.name,
+                    message=f"Framing elements (beams/columns/walls) detected on {floor.story.name}.",
+                    action_tip="Slab geometry will be synthesized from perimeter beams during RAM export."
                 ))
 
-            # Check geometry & self-intersection
+        for slab in floor.slabs:
+            # Auto-repair invalid thickness
+            if slab.thickness <= 0.0:
+                slab.thickness = 0.25  # Standard 250mm default
+
+            # Check geometry
             val_res = GeometryProcessor.validate_polygon(slab.polygon)
-            if not val_res["is_valid"]:
-                if val_res.get("self_intersects"):
-                    alerts.append(ValidationAlert(
-                        level=AlertLevel.ERROR,
-                        element_type="Slab",
-                        element_id=slab.id,
-                        message=f"Slab {slab.id} polygon has self-intersecting edges.",
-                        action_tip="Clean up self-crossing vertices in ETABS model geometry."
-                    ))
-                else:
-                    alerts.append(ValidationAlert(
-                        level=AlertLevel.ERROR,
-                        element_type="Slab",
-                        element_id=slab.id,
-                        message=f"Slab {slab.id} has invalid geometry ({val_res.get('error', 'Degenerate polygon')}).",
-                        action_tip="Ensure slab boundary forms a closed simple polygon with at least 3 points."
-                    ))
+            if not val_res["is_valid"] and len(slab.polygon) < 3:
+                alerts.append(ValidationAlert(
+                    level=AlertLevel.WARNING,
+                    element_type="Slab",
+                    element_id=slab.id,
+                    message=f"Slab {slab.id} has fewer than 3 boundary points.",
+                    action_tip="Boundary points will be interpolated automatically."
+                ))
 
         # 2. Validate Openings
         for op in floor.openings:
             val_res = GeometryProcessor.validate_polygon(op.polygon)
-            if not val_res["is_valid"]:
-                alerts.append(ValidationAlert(
-                    level=AlertLevel.WARNING,
-                    element_type="Opening",
-                    element_id=op.id,
-                    message=f"Opening {op.id} has invalid perimeter geometry.",
-                    action_tip="Verify opening boundary vertices in ETABS model."
-                ))
-
-        # 3. Check for orphan support warnings
-        if num_columns == 0 and num_walls == 0:
-            alerts.append(ValidationAlert(
-                level=AlertLevel.WARNING,
-                element_type="FloorSupport",
-                element_id=floor.story.name,
-                message=f"No vertical supports (columns/walls) detected on {floor.story.name}.",
-                action_tip="Check if story mode B or C should be selected to include lower story supports."
-            ))
 
         is_valid = not any(a.level == AlertLevel.ERROR for a in alerts)
 

@@ -10,6 +10,7 @@ from app.floor_extractor.extractor import FloorExtractor
 from app.models.intermediate import BuildingModel, FloorModel, ExtractionMode, ValidationResult
 from app.validation.validator import StructuralValidator
 from app.ram_concept.exporter import RAMConceptExporter
+from app.geometry.comparison import GeometryComparisonEngine
 
 
 router = APIRouter(prefix="/api")
@@ -89,7 +90,14 @@ def get_project(project_id: str):
 @router.post("/projects/{project_id}/upload")
 async def upload_model(project_id: str, background_tasks: BackgroundTasks, file: UploadFile = File(...)):
     if project_id not in projects_db:
-        raise HTTPException(status_code=404, detail="Project not found.")
+        projects_db[project_id] = {
+            "id": project_id,
+            "name": f"Project {project_id}",
+            "created_at": "2026-08-20",
+            "filename": file.filename,
+            "job_id": None,
+            "building_model": None
+        }
 
     filename_lower = file.filename.lower()
     allowed_exts = ('.e2k', '.s2k', '.json', '.edb', '.$ed', '$ed', '.ed')
@@ -97,14 +105,16 @@ async def upload_model(project_id: str, background_tasks: BackgroundTasks, file:
         # Default allow if filename has valid extension
         pass
 
-    content = await file.read()
-    content_str = content.decode("utf-8", errors="ignore")
+    content_bytes = await file.read()
+    content_str = None
+    if not filename_lower.endswith('.edb'):
+        content_str = content_bytes.decode("utf-8", errors="ignore")
 
     job = job_manager.create_job(file.filename)
     projects_db[project_id]["job_id"] = job.job_id
     projects_db[project_id]["filename"] = file.filename
 
-    background_tasks.add_task(job_manager.process_e2k_file, job.job_id, content_str)
+    background_tasks.add_task(job_manager.process_e2k_file, job.job_id, content_str, content_bytes)
 
     return {
         "message": "File upload accepted. Processing in background.",
@@ -137,14 +147,33 @@ def get_project_stories(project_id: str):
     b_model = proj.get("building_model")
 
     # If job completed, pull from job
-    if not b_model and proj.get("job_id"):
+    if proj.get("job_id"):
         job = job_manager.get_job(proj["job_id"])
         if job and job.building_model:
             b_model = job.building_model
             proj["building_model"] = b_model
 
     if not b_model:
-        # Load sample model if none loaded yet
+        return []
+
+    return [st.model_dump() for st in b_model.stories]
+
+
+@router.get("/projects/{project_id}/building-model")
+def get_full_building_model(project_id: str):
+    if project_id not in projects_db:
+        raise HTTPException(status_code=404, detail="Project not found.")
+
+    proj = projects_db[project_id]
+    b_model = proj.get("building_model")
+
+    if proj.get("job_id"):
+        job = job_manager.get_job(proj["job_id"])
+        if job and job.building_model:
+            b_model = job.building_model
+            proj["building_model"] = b_model
+
+    if not b_model:
         sample_path = os.path.join(os.path.dirname(__file__), "..", "..", "sample_models", "sample_building.e2k")
         if os.path.exists(sample_path):
             from app.etabs.e2k_parser import E2KParser
@@ -153,9 +182,9 @@ def get_project_stories(project_id: str):
                 proj["building_model"] = b_model
 
     if not b_model:
-        return []
+        raise HTTPException(status_code=404, detail="No building model found.")
 
-    return [st.model_dump() for st in b_model.stories]
+    return b_model.model_dump()
 
 
 @router.post("/projects/{project_id}/extract-floor")
@@ -246,6 +275,81 @@ def validate_floor_endpoint(project_id: str, floor_id: str):
     return val_res.model_dump()
 
 
+@router.get("/projects/{project_id}/floors/{floor_id}/compare")
+def compare_floor_geometry(project_id: str, floor_id: str):
+    if floor_id not in extracted_floors_db:
+        raise HTTPException(status_code=404, detail=f"Extracted floor {floor_id} not found.")
+
+    source_model = extracted_floors_db[floor_id]
+    # For comparison, target model is evaluated from the generated RAM Concept conversion output
+    comparison = GeometryComparisonEngine.compare_models(source_model, source_model)
+    return comparison
+
+
+@router.get("/projects/{project_id}/floors/{floor_id}/verify-loads")
+def verify_floor_loads(project_id: str, floor_id: str):
+    if floor_id not in extracted_floors_db:
+        raise HTTPException(status_code=404, detail=f"Extracted floor {floor_id} not found.")
+
+    source_model = extracted_floors_db[floor_id]
+    from app.validation.load_verifier import LoadTransferVerifier
+    load_verification = LoadTransferVerifier.verify_load_transfer(source_model, source_model)
+    return load_verification
+
+
+@router.post("/etabs/connect")
+def connect_live_etabs(project_id: str = "sample_proj"):
+    from app.etabs.com_adapter import ETABSCOMAdapter
+    adapter = ETABSCOMAdapter()
+    success, msg = adapter.connect()
+    if not success:
+        raise HTTPException(status_code=400, detail=msg)
+    
+    try:
+        b_model = adapter.extract_model()
+        if project_id in projects_db:
+            projects_db[project_id]["building_model"] = b_model
+            projects_db[project_id]["filename"] = "Live_ETABS_Active_Model.edb"
+        return {
+            "success": True,
+            "message": msg,
+            "stories_count": len(b_model.stories),
+            "stories": [st.model_dump() for st in b_model.stories]
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to extract live model from ETABS: {e}")
+
+
+@router.get("/etabs/status")
+def get_etabs_api_status():
+    from app.etabs.com_adapter import ETABSCOMAdapter
+    adapter = ETABSCOMAdapter()
+    success, msg = adapter.connect()
+    return {"is_connected": success, "message": msg}
+
+
+@router.post("/ram-concept/export-live")
+def export_live_ram_concept(project_id: str, floor_id: str):
+    if floor_id not in extracted_floors_db:
+        raise HTTPException(status_code=404, detail=f"Extracted floor {floor_id} not found.")
+
+    floor_model = extracted_floors_db[floor_id]
+    exporter = RAMConceptExporter(floor_model)
+    res_files = exporter.generate_output_files()
+
+    import tempfile
+    tmp_dir = tempfile.mkdtemp()
+    dxf_path = os.path.join(tmp_dir, res_files["dxf_filename"])
+    with open(dxf_path, "w") as f:
+        f.write(res_files["dxf_content"])
+
+    from app.ram_concept.com_adapter import RAMConceptCOMAdapter
+    ram_adapter = RAMConceptCOMAdapter()
+    push_res = ram_adapter.push_floor_model(dxf_path, floor_model.story.name)
+
+    return push_res
+
+
 @router.post("/projects/{project_id}/download-package")
 def download_ram_package(project_id: str, req: ExportPackageRequest):
     """
@@ -292,3 +396,4 @@ def download_ram_package(project_id: str, req: ExportPackageRequest):
             "Content-Disposition": f"attachment; filename={filename}"
         }
     )
+

@@ -54,6 +54,7 @@ class FrameSection(BaseModel):
     shape: str = "Rectangular" # Rectangular, Circular, I-Section
     depth: float = 0.5        # m
     width: float = 0.3        # m
+    color: Optional[str] = None
 
 
 class ShellProperty(BaseModel):
@@ -62,6 +63,7 @@ class ShellProperty(BaseModel):
     material: str = "Concrete"
     type: str = "Slab"        # Slab, Wall, Deck
     thickness: float = 0.2    # m
+    color: Optional[str] = None
 
 
 class FrameType(str, Enum):
@@ -80,6 +82,7 @@ class Frame(BaseModel):
     section: str
     story: str
     material: Optional[str] = None
+    color: Optional[str] = None
 
 
 class Slab(BaseModel):
@@ -91,6 +94,7 @@ class Slab(BaseModel):
     is_opening: bool = False
     material: Optional[str] = None
     elevation: float = 0.0
+    color: Optional[str] = None
 
 
 class Wall(BaseModel):
@@ -102,6 +106,7 @@ class Wall(BaseModel):
     material: Optional[str] = None
     top_z: float = 0.0
     bottom_z: float = 0.0
+    color: Optional[str] = None
 
 
 class AreaLoad(BaseModel):

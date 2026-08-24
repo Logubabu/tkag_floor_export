@@ -9,6 +9,12 @@ export const api = {
     return res.json();
   },
 
+  async getBuildingModel(projectId: string) {
+    const res = await fetch(`${API_BASE}/projects/${projectId}/building-model`);
+    if (!res.ok) throw new Error('Failed to fetch complete building model.');
+    return res.json();
+  },
+
   async uploadEtabsModel(projectId: string, file: File): Promise<{ job_id: string }> {
     const formData = new FormData();
     formData.append('file', file);
@@ -57,6 +63,24 @@ export const api = {
       method: 'POST',
     });
     if (!res.ok) throw new Error('Failed to validate floor data.');
+    return res.json();
+  },
+
+  async connectEtabsApi(projectId: string = 'sample_proj') {
+    const res = await fetch(`${API_BASE}/etabs/connect?project_id=${projectId}`, { method: 'POST' });
+    if (!res.ok) {
+      const errData = await res.json().catch(() => ({}));
+      throw new Error(errData.detail || 'Failed to connect to live ETABS instance via COM API.');
+    }
+    return res.json();
+  },
+
+  async exportLiveRamConcept(projectId: string, floorId: string) {
+    const res = await fetch(`${API_BASE}/ram-concept/export-live?project_id=${projectId}&floor_id=${floorId}`, { method: 'POST' });
+    if (!res.ok) {
+      const errData = await res.json().catch(() => ({}));
+      throw new Error(errData.detail || 'Failed to push floor model to live RAM Concept via COM API.');
+    }
     return res.json();
   },
 

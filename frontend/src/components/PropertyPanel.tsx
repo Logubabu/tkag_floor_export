@@ -1,9 +1,34 @@
 import React from 'react';
 import { Info, Box, Tag, Ruler, Cpu, X } from 'lucide-react';
 import { useStore } from '../store/useStore';
+import { formatLength, formatForce, formatAreaLoad } from '../utils/unitConverter';
 
 export const PropertyPanel: React.FC = () => {
-  const { selectedElement, setSelectedElement, floorModel } = useStore();
+  const { selectedElement, setSelectedElement, activeUnits } = useStore();
+
+  const formatAttributeValue = (key: string, val: any): string => {
+    if (val === null || val === undefined) return '-';
+    const strVal = String(val);
+    const numVal = parseFloat(strVal);
+
+    // Format length attributes
+    if (['thickness', 'depth', 'width'].includes(key.toLowerCase()) && !isNaN(numVal)) {
+      return formatLength(numVal, activeUnits.length);
+    }
+    if (['elevation', 'height', 'top_z', 'bottom_z', 'x', 'y', 'z'].includes(key.toLowerCase()) && !isNaN(numVal)) {
+      return formatLength(numVal, activeUnits.length);
+    }
+
+    // Format force / load attributes
+    if (['fz', 'force'].includes(key.toLowerCase()) && !isNaN(numVal)) {
+      return formatForce(numVal, activeUnits.force);
+    }
+    if (['magnitude', 'area_load', 'uniform'].includes(key.toLowerCase()) && !isNaN(numVal)) {
+      return formatAreaLoad(numVal, activeUnits.length);
+    }
+
+    return strVal;
+  };
 
   if (!selectedElement) {
     return (
@@ -54,7 +79,7 @@ export const PropertyPanel: React.FC = () => {
             {Object.entries(selectedElement.details).map(([key, val]) => (
               <div key={key} className="flex items-center justify-between p-2.5">
                 <span className="text-slate-400 capitalize">{key.replace('_', ' ')}:</span>
-                <span className="font-mono text-slate-200">{String(val)}</span>
+                <span className="font-mono text-slate-200">{formatAttributeValue(key, val)}</span>
               </div>
             ))}
           </div>

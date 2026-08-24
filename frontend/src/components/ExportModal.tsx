@@ -148,59 +148,91 @@ export const ExportModal: React.FC<ExportModalProps> = ({ isOpen, onClose }) => 
               </div>
             </label>
 
-            {/* Developer Formats (Commented out by default - enable if needed)
-            <div className="pt-2">
-              <details className="text-[11px] text-slate-400">
-                <summary className="cursor-pointer font-medium hover:text-slate-200 text-slate-500 select-none">
-                  Advanced Developer Formats (Automation Script & JSON Schema)
-                </summary>
-                <div className="mt-2 space-y-2 pl-2">
-                  <label className="flex items-center gap-2 cursor-pointer">
-                    <input
-                      type="checkbox"
-                      checked={exportPy}
-                      onChange={(e) => setExportPy(e.target.checked)}
-                      className="w-3.5 h-3.5 rounded accent-cyan-500"
-                    />
-                    <span>Include Python Automation Macro (.PY)</span>
-                  </label>
-
-                  <label className="flex items-center gap-2 cursor-pointer">
-                    <input
-                      type="checkbox"
-                      checked={exportJson}
-                      onChange={(e) => setExportJson(e.target.checked)}
-                      className="w-3.5 h-3.5 rounded accent-cyan-500"
-                    />
-                    <span>Include Intermediate Structural JSON (.JSON)</span>
-                  </label>
+            {/* Python Automation Script Option */}
+            <label className={`p-3 rounded-lg border flex items-center justify-between cursor-pointer transition ${
+              exportPy ? 'bg-cyan-950/40 border-cyan-700/60' : 'bg-slate-950/40 border-slate-800 hover:border-slate-700'
+            }`}>
+              <div className="flex items-center gap-3">
+                <input
+                  type="checkbox"
+                  checked={exportPy}
+                  onChange={(e) => setExportPy(e.target.checked)}
+                  className="w-4 h-4 rounded accent-cyan-500"
+                />
+                <Terminal className="w-5 h-5 text-purple-400 shrink-0" />
+                <div>
+                  <p className="font-semibold text-slate-200">RAM Concept Python COM Automation Script (.PY)</p>
+                  <p className="text-[11px] text-slate-400">
+                    Automated Python macro script using RAM Concept COM API
+                  </p>
                 </div>
-              </details>
-            </div>
-            */}
+              </div>
+            </label>
+
+            {/* Intermediate JSON Option */}
+            <label className={`p-3 rounded-lg border flex items-center justify-between cursor-pointer transition ${
+              exportJson ? 'bg-cyan-950/40 border-cyan-700/60' : 'bg-slate-950/40 border-slate-800 hover:border-slate-700'
+            }`}>
+              <div className="flex items-center gap-3">
+                <input
+                  type="checkbox"
+                  checked={exportJson}
+                  onChange={(e) => setExportJson(e.target.checked)}
+                  className="w-4 h-4 rounded accent-cyan-500"
+                />
+                <FileCode className="w-5 h-5 text-amber-400 shrink-0" />
+                <div>
+                  <p className="font-semibold text-slate-200">Intermediate Structural Model (.JSON)</p>
+                  <p className="text-[11px] text-slate-400">
+                    Structured floor schema containing slabs, beams, columns, walls, & loads
+                  </p>
+                </div>
+              </div>
+            </label>
           </div>
         </div>
 
         {/* Footer */}
-        <div className="px-6 py-4 border-t border-slate-800 bg-slate-950/50 flex justify-end gap-3">
+        <div className="px-6 py-4 border-t border-slate-800 bg-slate-950/50 flex justify-between items-center gap-3">
           <button
-            onClick={onClose}
-            className="px-4 py-2 text-xs font-medium text-slate-400 hover:text-slate-200 transition"
+            onClick={async () => {
+              if (selectedStories.length === 0) return alert('Select a story first.');
+              try {
+                const sName = selectedStories[0].name;
+                const batchRes = await api.extractBatchFloors(activeProjectId, [sName], useStore.getState().extractionMode);
+                const fid = batchRes.extracted_floors[0].floor_id;
+                const pushRes = await api.exportLiveRamConcept(activeProjectId, fid);
+                alert(pushRes.message || 'Pushed to live RAM Concept COM API!');
+              } catch (e: any) {
+                alert(e.message || 'Failed to push to RAM Concept COM session.');
+              }
+            }}
+            disabled={selectedStories.length === 0}
+            className="px-4 py-2 bg-emerald-950/80 hover:bg-emerald-900 border border-emerald-800 text-emerald-300 text-xs font-semibold rounded-lg transition"
+            title="Push selected floor directly into active RAM Concept application via COM API"
           >
-            Close
+            Push to RAM Concept (COM API)
           </button>
-          <button
-            onClick={handleDownloadPackage}
-            disabled={isExporting || selectedStories.length === 0}
-            className="px-5 py-2 bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 disabled:opacity-50 text-white text-xs font-semibold rounded-lg transition shadow-lg shadow-cyan-950/50 flex items-center gap-2"
-          >
-            <Download className="w-4 h-4" />
-            <span>
-              {isExporting
-                ? 'Preparing ZIP Package...'
-                : `Download Package (${selectedStories.length} Floor${selectedStories.length > 1 ? 's' : ''})`}
-            </span>
-          </button>
+          <div className="flex items-center gap-3">
+            <button
+              onClick={onClose}
+              className="px-4 py-2 text-xs font-medium text-slate-400 hover:text-slate-200 transition"
+            >
+              Close
+            </button>
+            <button
+              onClick={handleDownloadPackage}
+              disabled={isExporting || selectedStories.length === 0}
+              className="px-5 py-2 bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 disabled:opacity-50 text-white text-xs font-semibold rounded-lg transition shadow-lg shadow-cyan-950/50 flex items-center gap-2"
+            >
+              <Download className="w-4 h-4" />
+              <span>
+                {isExporting
+                  ? 'Preparing ZIP Package...'
+                  : `Download Package (${selectedStories.length} Floor${selectedStories.length > 1 ? 's' : ''})`}
+              </span>
+            </button>
+          </div>
         </div>
       </div>
     </div>

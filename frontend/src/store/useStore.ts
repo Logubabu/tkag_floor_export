@@ -9,6 +9,8 @@ interface AppState {
   extractionMode: ExtractionMode;
   activeUnits: { length: string; force: string };
   floorModel: FloorModel | null;
+  fullBuildingModel: any | null;
+  viewMode: 'full' | 'floor';
   selectedElement: SelectedElement | null;
   validationResult: ValidationResult | null;
   layerVisibility: {
@@ -31,6 +33,8 @@ interface AppState {
   setExtractionMode: (mode: ExtractionMode) => void;
   setActiveUnits: (units: { length: string; force: string }) => void;
   setFloorModel: (model: FloorModel | null) => void;
+  setFullBuildingModel: (model: any | null) => void;
+  setViewMode: (mode: 'full' | 'floor') => void;
   setSelectedElement: (element: SelectedElement | null) => void;
   setValidationResult: (res: ValidationResult | null) => void;
   toggleLayerVisibility: (layer: keyof AppState['layerVisibility']) => void;
@@ -46,6 +50,8 @@ export const useStore = create<AppState>((set) => ({
   extractionMode: 'Mode B — Slab + Supporting Elements',
   activeUnits: { length: 'm', force: 'kN' },
   floorModel: null,
+  fullBuildingModel: null,
+  viewMode: 'full',
   selectedElement: null,
   validationResult: null,
   layerVisibility: {
@@ -77,6 +83,8 @@ export const useStore = create<AppState>((set) => ({
   setExtractionMode: (mode) => set({ extractionMode: mode }),
   setActiveUnits: (units) => set({ activeUnits: units }),
   setFloorModel: (model) => set({ floorModel: model, selectedElement: null }),
+  setFullBuildingModel: (model) => set({ fullBuildingModel: model }),
+  setViewMode: (mode) => set({ viewMode: mode }),
   setSelectedElement: (element) => set({ selectedElement: element }),
   setValidationResult: (res) => set({ validationResult: res }),
   toggleLayerVisibility: (layer) =>

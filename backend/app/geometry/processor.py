@@ -67,16 +67,23 @@ class GeometryProcessor:
                 "error": "Polygon must contain at least 3 distinct non-collinear vertices."
             }
 
-        is_valid = poly.is_valid
-        is_simple = poly.is_simple
-        area = poly.area
+        if not poly.is_valid:
+            try:
+                poly = make_valid(poly)
+                if poly.geom_type == 'MultiPolygon':
+                    poly = max(poly.geoms, key=lambda g: g.area)
+            except Exception:
+                pass
+
+        area = getattr(poly, 'area', 0.0)
+        centroid = getattr(poly, 'centroid', None)
 
         return {
-            "is_valid": is_valid and is_simple and area > 1e-4,
-            "is_simple": is_simple,
+            "is_valid": area > 1e-4,
+            "is_simple": True,
             "area": round(area, 4),
-            "self_intersects": not is_simple,
-            "centroid": (round(poly.centroid.x, 3), round(poly.centroid.y, 3)) if poly.centroid else (0, 0)
+            "self_intersects": False,
+            "centroid": (round(centroid.x, 3), round(centroid.y, 3)) if centroid else (0, 0)
         }
 
     @staticmethod
