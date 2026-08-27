@@ -106,7 +106,7 @@ export const api = {
     floorIds: string[],
     options: { include_dxf: boolean; include_cpt: boolean; include_json?: boolean; include_py?: boolean } = {
       include_dxf: true,
-      include_cpt: false,
+      include_cpt: true,
       include_json: false,
       include_py: false,
     }
@@ -118,12 +118,19 @@ export const api = {
       }) => Promise<{ createWritable: () => Promise<{ write: (data: Blob) => Promise<void>; close: () => Promise<void> }> }>;
     };
     const filename = `ETABS_RAMConcept_Export_${projectId}.zip`;
-    const fileHandle = pickerWindow.showSaveFilePicker
-      ? await pickerWindow.showSaveFilePicker({
+    let fileHandle = null;
+    if (pickerWindow.showSaveFilePicker) {
+      try {
+        fileHandle = await pickerWindow.showSaveFilePicker({
           suggestedName: filename,
           types: [{ description: 'ZIP archive', accept: { 'application/zip': ['.zip'] } }],
-        })
-      : null;
+        });
+      } catch (err: any) {
+        if (err.name === 'AbortError') {
+          return;
+        }
+      }
+    }
 
     const res = await fetch(`${API_BASE}/projects/${projectId}/download-package`, {
       method: 'POST',

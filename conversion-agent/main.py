@@ -2,7 +2,19 @@ import os
 import sys
 import argparse
 import logging
-from conversionagent.conversion.pipeline import ConversionPipeline
+
+AGENT_DIR = os.path.dirname(os.path.abspath(__file__))
+REPO_ROOT = os.path.abspath(os.path.join(AGENT_DIR, ".."))
+BACKEND_DIR = os.path.join(REPO_ROOT, "backend")
+
+for p in [AGENT_DIR, REPO_ROOT, BACKEND_DIR]:
+    if p not in sys.path:
+        sys.path.insert(0, p)
+
+try:
+    from conversion.pipeline import ConversionPipeline
+except ModuleNotFoundError:
+    from conversionagent.conversion.pipeline import ConversionPipeline
 
 def main():
     parser = argparse.ArgumentParser(description="Windows Conversion Agent for ETABS to RAM Concept")

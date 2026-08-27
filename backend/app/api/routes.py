@@ -1,6 +1,7 @@
 from typing import Optional
 import os
 import io
+import zipfile
 import re
 from datetime import datetime
 from typing import List, Dict, Any
@@ -8,8 +9,9 @@ from fastapi import APIRouter, UploadFile, File, HTTPException, BackgroundTasks,
 from pydantic import BaseModel
 
 from app.workers.job_manager import job_manager
+from app.etabs.e2k_parser import E2KParser
 from app.floor_extractor.extractor import FloorExtractor
-from app.models.intermediate import FloorModel, ExtractionMode
+from app.models.intermediate import BuildingModel, FloorModel, ExtractionMode
 from app.validation.validator import StructuralValidator
 from app.ram_concept.exporter import RAMConceptExporter
 from app.geometry.comparison import GeometryComparisonEngine
@@ -52,6 +54,19 @@ class ExportPackageRequest(BaseModel):
     include_cpt: bool = False
     include_json: bool = False
     include_py: bool = False
+
+
+class CalibrationRequest(BaseModel):
+    etabs_pt1: List[float]
+    etabs_pt2: List[float]
+    ram_pt1: List[float]
+    ram_pt2: List[float]
+
+
+class ETABSLoadExtractionRequest(BaseModel):
+    story_name: str
+    load_cases: List[str]
+
 
 
 @router.post("/projects")
@@ -208,71 +223,58 @@ def get_job_status(job_id: str):
     return job.to_dict()
 
 
-@router.get("/projects/{project_id}/stories")
-def get_project_stories(project_id: str):
-    proj = _get_project_or_active(project_id)
-    b_model = proj.get("building_model")
+def _get_building_model_for_project(proj: dict) -> Optional[BuildingModel]:
+    if proj.get("building_model"):
+        return proj["building_model"]
 
-    # If job exists, check status
     if proj.get("job_id"):
         job = job_manager.get_job(proj["job_id"])
         if job:
             if job.status == "FAILED":
                 raise HTTPException(status_code=422, detail=job.error or "Model parsing job failed.")
             if job.building_model:
-                b_model = job.building_model
-                proj["building_model"] = b_model
+                proj["building_model"] = job.building_model
+                return job.building_model
 
-    if not b_model and job_manager.jobs:
+    if job_manager.jobs:
         active_job = list(job_manager.jobs.values())[-1]
         if active_job and active_job.building_model:
-            b_model = active_job.building_model
-            proj["building_model"] = b_model
+            proj["building_model"] = active_job.building_model
+            return active_job.building_model
 
+    content_str = proj.get("text_export_content")
+    if content_str:
+        parser = E2KParser()
+        b_model = parser.parse_string(content_str)
+        if b_model and b_model.stories:
+            proj["building_model"] = b_model
+            return b_model
+
+    return None
+
+
+@router.get("/projects/{project_id}/stories")
+def get_project_stories(project_id: str):
+    proj = _get_project_or_active(project_id)
+    b_model = _get_building_model_for_project(proj)
     if not b_model:
         return []
-
     return [st.model_dump() for st in b_model.stories]
 
 
 @router.get("/projects/{project_id}/building-model")
 def get_full_building_model(project_id: str):
     proj = _get_project_or_active(project_id)
-    b_model = proj.get("building_model")
-
-    if proj.get("job_id"):
-        job = job_manager.get_job(proj["job_id"])
-        if job:
-            if job.status == "FAILED":
-                raise HTTPException(status_code=422, detail=job.error or "Model parsing job failed.")
-            if job.building_model:
-                b_model = job.building_model
-                proj["building_model"] = b_model
-
-    if not b_model and job_manager.jobs:
-        active_job = list(job_manager.jobs.values())[-1]
-        if active_job and active_job.building_model:
-            b_model = active_job.building_model
-            proj["building_model"] = b_model
-
+    b_model = _get_building_model_for_project(proj)
     if not b_model:
-        parser = E2KParser()
-        b_model = parser.parse_binary_edb_bytes(b"", filename=proj.get("filename") or "ETABS Model")
-        proj["building_model"] = b_model
-
+        raise HTTPException(status_code=404, detail="Building model not ready or processing.")
     return b_model.model_dump()
 
 
 @router.post("/projects/{project_id}/extract-floor")
 def extract_floor(project_id: str, req: FloorExtractRequest):
     proj = _get_project_or_active(project_id)
-    b_model = proj.get("building_model")
-
-    if not b_model and job_manager.jobs:
-        active_job = list(job_manager.jobs.values())[-1]
-        if active_job and active_job.building_model:
-            b_model = active_job.building_model
-            proj["building_model"] = b_model
+    b_model = _get_building_model_for_project(proj)
 
     if not b_model:
         raise HTTPException(status_code=400, detail="No valid ETABS model loaded for this project. Please upload a valid .$ET or .E2K file, or run ETABS API.")
@@ -298,13 +300,7 @@ def extract_floor(project_id: str, req: FloorExtractRequest):
 @router.post("/projects/{project_id}/extract-floors")
 def extract_batch_floors(project_id: str, req: BatchFloorExtractRequest):
     proj = _get_project_or_active(project_id)
-    b_model = proj.get("building_model")
-
-    if not b_model and job_manager.jobs:
-        active_job = list(job_manager.jobs.values())[-1]
-        if active_job and active_job.building_model:
-            b_model = active_job.building_model
-            proj["building_model"] = b_model
+    b_model = _get_building_model_for_project(proj)
 
     if not b_model:
         raise HTTPException(status_code=400, detail="No ETABS model loaded for this project yet.")
@@ -434,26 +430,31 @@ def download_ram_package(project_id: str, req: ExportPackageRequest):
 
     with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
         for fid in req.floor_ids:
-            if fid in extracted_floors_db:
-                floor_model = extracted_floors_db[fid]
-                exporter = RAMConceptExporter(floor_model)
-                res = exporter.generate_output_files()
-                clean_name = "".join(c for c in floor_model.story.name if c.isalnum() or c in ['_', '-'])
-                floor_folder_name = f"Floor_{clean_name}" if not clean_name.lower().startswith("floor") else clean_name
+            try:
+                floor_model = _get_extracted_floor(fid)
+            except HTTPException:
+                continue
 
-                if req.include_dxf:
-                    zip_file.writestr(f"{floor_folder_name}/{res['dxf_filename']}", res["dxf_content"])
-                
-                if req.include_cpt:
-                    cpt_filename = res.get("cpt_filename", res["dxf_filename"].replace(".dxf", ".cpt"))
-                    cpt_content = res.get("cpt_content", res["dxf_content"])
-                    zip_file.writestr(f"{floor_folder_name}/{cpt_filename}", cpt_content)
+            exporter = RAMConceptExporter(floor_model)
+            res = exporter.generate_output_files()
+            clean_name = "".join(c for c in floor_model.story.name if c.isalnum() or c in ['_', '-'])
+            floor_folder_name = f"Floor_{clean_name}" if not clean_name.lower().startswith("floor") else clean_name
 
-                if req.include_py:
-                    zip_file.writestr(f"{floor_folder_name}/{res['automation_filename']}", res["automation_content"])
+            if req.include_dxf:
+                zip_file.writestr(f"{floor_folder_name}/{res['dxf_filename']}", res["dxf_content"])
+            
+            if req.include_cpt:
+                cpt_filename = res.get("cpt_filename") or f"{clean_name}_RAMConcept_Model.cpt"
+                cpt_content = res.get("cpt_content")
+                if cpt_content is None:
+                    cpt_content = exporter._generate_cpt()
+                zip_file.writestr(f"{floor_folder_name}/{cpt_filename}", cpt_content)
 
-                if req.include_json:
-                    zip_file.writestr(f"{floor_folder_name}/{res['json_filename']}", res["json_content"])
+            if req.include_py:
+                zip_file.writestr(f"{floor_folder_name}/{res['automation_filename']}", res["automation_content"])
+
+            if req.include_json:
+                zip_file.writestr(f"{floor_folder_name}/{res['json_filename']}", res["json_content"])
 
     zip_buffer.seek(0)
     filename = f"ETABS_RAMConcept_Export_{project_id}.zip"
@@ -523,8 +524,59 @@ def preview_floor_export(project_id: str, floor_id: str):
         "dxf_preview": res["dxf_content"][:2000],  # first 2KB preview
         "automation_filename": res["automation_filename"],
         "automation_preview": res["automation_content"],
-        "cpt_filename": res.get("cpt_filename", res["dxf_filename"].replace(".dxf", ".cpt")),
+        "cpt_filename": res.get("cpt_filename") or f"{clean_name}_RAMConcept_Model.cpt",
+        "cpt_preview": res.get("cpt_content", ""),
         "json_filename": res["json_filename"],
         "floor_model": floor_model.model_dump()
     }
+
+
+@router.post("/calibration/transform")
+def calculate_calibration_transform(req: CalibrationRequest):
+    """
+    Computes affine 2D rotation matrix and translation vector mapping ETABS benchmark coordinates
+    to RAM Concept benchmark coordinates using 2 matching control points.
+    """
+    from app.geometry.processor import GeometryProcessor
+    if len(req.etabs_pt1) < 2 or len(req.etabs_pt2) < 2 or len(req.ram_pt1) < 2 or len(req.ram_pt2) < 2:
+        raise HTTPException(status_code=400, detail="Each coordinate point must contain at least [x, y].")
+
+    rot_matrix, translation = GeometryProcessor.calibrate_coordinates(
+        (req.etabs_pt1[0], req.etabs_pt1[1]),
+        (req.etabs_pt2[0], req.etabs_pt2[1]),
+        (req.ram_pt1[0], req.ram_pt1[1]),
+        (req.ram_pt2[0], req.ram_pt2[1])
+    )
+
+    return {
+        "success": True,
+        "rotation_matrix": rot_matrix,
+        "translation": translation,
+        "preview": {
+            "etabs_pt1_transformed": list(GeometryProcessor.transform_point_2d(req.etabs_pt1[0], req.etabs_pt1[1], rot_matrix, translation)),
+            "etabs_pt2_transformed": list(GeometryProcessor.transform_point_2d(req.etabs_pt2[0], req.etabs_pt2[1], rot_matrix, translation))
+        }
+    }
+
+
+@router.post("/etabs/extract-column-forces")
+def extract_etabs_column_forces(req: ETABSLoadExtractionRequest):
+    """
+    Queries max axial forces for all columns at a specified story from an active ETABS session
+    for the requested load cases.
+    """
+    from app.etabs.com_adapter import ETABSCOMAdapter
+    adapter = ETABSCOMAdapter()
+    running, msg = adapter.connect_running_instance()
+    if not running:
+        raise HTTPException(status_code=400, detail=f"No active ETABS session available: {msg}")
+
+    column_forces = adapter.extract_column_axial_forces(req.story_name, req.load_cases)
+    return {
+        "story_name": req.story_name,
+        "load_cases": req.load_cases,
+        "column_forces_count": len(column_forces),
+        "column_forces": column_forces
+    }
+
 

@@ -63,3 +63,44 @@ def test_api_upload_unrelated_edb_isolation():
     assert len(res_stories.json()) > 0
 
 
+def test_download_ram_package_with_cpt():
+    text_content = '$ STORIES\nSTORY "Story CPT" HEIGHT 3.5 ELEV 3.5\n'
+    client.post(
+        "/api/projects/proj_cpt_test/upload",
+        files={"file": ("building_cpt.e2k", io.BytesIO(text_content.encode("utf-8")), "text/plain")}
+    )
+    batch_res = client.post(
+        "/api/projects/proj_cpt_test/extract-floors",
+        json={"story_names": ["Story CPT"], "mode": "Mode B — Slab + Supporting Elements"}
+    )
+    assert batch_res.status_code == 200
+    extracted = batch_res.json().get("extracted_floors", [])
+    assert len(extracted) > 0
+    floor_id = extracted[0]["floor_id"]
+
+    # Test downloading package with include_cpt=True
+    pkg_res = client.post(
+        "/api/projects/proj_cpt_test/download-package",
+        json={
+            "floor_ids": [floor_id],
+            "include_dxf": True,
+            "include_cpt": True,
+            "include_json": True,
+            "include_py": True
+        }
+    )
+    assert pkg_res.status_code == 200
+    assert pkg_res.headers["content-type"] == "application/zip"
+    
+    # Inspect zip contents
+    import zipfile
+    with zipfile.ZipFile(io.BytesIO(pkg_res.content)) as z:
+        names = z.namelist()
+        cpt_files = [n for n in names if n.endswith(".cpt")]
+        assert len(cpt_files) == 1
+        cpt_data = z.read(cpt_files[0]).decode("utf-8")
+        assert "BEGIN_MODEL" in cpt_data
+        assert "RAM_CONCEPT_V8" in cpt_data
+
+
+

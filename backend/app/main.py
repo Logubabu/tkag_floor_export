@@ -25,6 +25,14 @@ app.add_middleware(
 
 app.include_router(api_router)
 
+@app.get("/health")
+@app.get("/api/health")
+def health_check():
+    return {
+        "status": "healthy",
+        "service": "ETABS to RAM Concept Floor Extraction Engine"
+    }
+
 # Mount frontend static assets if available (Unified Single Container)
 STATIC_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "static"))
 
@@ -35,7 +43,7 @@ if os.path.exists(STATIC_DIR):
 
     @app.get("/{full_path:path}")
     async def serve_spa(full_path: str):
-        if full_path.startswith("api") or full_path == "health":
+        if full_path.startswith("api"):
             return {"detail": "Not Found"}
         target_file = os.path.join(STATIC_DIR, full_path)
         if os.path.isfile(target_file):
@@ -46,16 +54,8 @@ if os.path.exists(STATIC_DIR):
         return {"detail": "Not Found"}
 
 
-@app.get("/health")
-@app.get("/api/health")
-def health_check():
-    return {
-        "status": "healthy",
-        "service": "ETABS to RAM Concept Floor Extraction Engine"
-    }
-
-
 if __name__ == "__main__":
     import uvicorn
     port = int(os.getenv("PORT", "8080"))
     uvicorn.run("main:app", host="0.0.0.0", port=port, reload=True)
+

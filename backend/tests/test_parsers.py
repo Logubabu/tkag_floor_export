@@ -26,8 +26,25 @@ def test_parse_set_sample():
         content = f.read()
     parser = E2KParser()
     model = parser.parse_string(content)
-    assert len(model.stories) > 0
+    assert len(model.stories) == 13
     assert len(model.slabs) > 0 or len(model.nodes) > 0
+    assert model.units.force == "KN"
+    assert model.units.length == "M"
+    # Verify cumulative elevations were calculated bottom-to-top properly
+    story_elevations = [st.elevation for st in model.stories]
+    assert len(set(story_elevations)) == 13  # All 13 stories have distinct elevations
+    assert model.stories[0].elevation > model.stories[-1].elevation  # Top story (TR) > Base elevation
+
+def test_unit_parsing_unquoted_and_quoted():
+    text_quoted = '$ CONTROLS\n  UNITS  "KN"  "M"  "C"'
+    model1 = E2KParser().parse_string(text_quoted)
+    assert model1.units.force == "KN"
+    assert model1.units.length == "M"
+
+    text_unquoted = '$ CONTROLS\n  UNITS  KIP  IN  F'
+    model2 = E2KParser().parse_string(text_unquoted)
+    assert model2.units.force == "KIP"
+    assert model2.units.length == "IN"
 
 def test_parse_edb_binary_sample():
     edb_path = os.path.join(os.path.dirname(__file__), "..", "..", "sample_models", "P-796-ULT-V22.3-UPDATED-01-06-2026.EDB")

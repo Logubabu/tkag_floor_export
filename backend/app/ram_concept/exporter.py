@@ -250,7 +250,11 @@ class RAMConceptExporter:
 
         lines = [
             "0\nSECTION\n2\nHEADER\n0\nENDSEC\n",
-            "0\nSECTION\n2\nTABLES\n0\nTABLE\n2\nLAYER\n70\n10\n"
+            "0\nSECTION\n2\nTABLES\n",
+            "0\nTABLE\n2\nLTYPE\n70\n1\n",
+            "0\nLTYPE\n2\nCONTINUOUS\n70\n0\n3\nSolid line\n72\n65\n73\n0\n40\n0.0\n",
+            "0\nENDTAB\n",
+            "0\nTABLE\n2\nLAYER\n70\n10\n"
         ]
 
         for lname, color in layers:
@@ -264,63 +268,56 @@ class RAMConceptExporter:
         for slab in self.prepared_data.get("slabs", []):
             pts = slab.get("polygon", [])
             if len(pts) > 1:
-                lines.append("0\nPOLYLINE\n8\nSLAB_OUTLINE\n66\n1\n70\n1\n")
+                lines.append(f"0\nLWPOLYLINE\n8\nSLAB_OUTLINE\n90\n{len(pts)}\n70\n1\n")
                 for pt in pts:
-                    lines.append(f"0\nVERTEX\n8\nSLAB_OUTLINE\n10\n{pt['x']:.4f}\n20\n{pt['y']:.4f}\n30\n0.0\n")
-                lines.append("0\nSEQEND\n")
+                    lines.append(f"10\n{pt['x']:.4f}\n20\n{pt['y']:.4f}\n")
 
         # 2. Openings -> OPENINGS
         for op in self.prepared_data.get("openings", []):
             pts = op.get("polygon", [])
             if len(pts) > 1:
-                lines.append("0\nPOLYLINE\n8\nOPENINGS\n66\n1\n70\n1\n")
+                lines.append(f"0\nLWPOLYLINE\n8\nOPENINGS\n90\n{len(pts)}\n70\n1\n")
                 for pt in pts:
-                    lines.append(f"0\nVERTEX\n8\nOPENINGS\n10\n{pt['x']:.4f}\n20\n{pt['y']:.4f}\n30\n0.0\n")
-                lines.append("0\nSEQEND\n")
+                    lines.append(f"10\n{pt['x']:.4f}\n20\n{pt['y']:.4f}\n")
 
         # 3. Beams -> BEAMS
         for bm in self.prepared_data.get("beams", []):
             st, en = bm.get("start", {}), bm.get("end", {})
             lines.append(f"0\nLINE\n8\nBEAMS\n10\n{st.get('x', 0.0):.4f}\n20\n{st.get('y', 0.0):.4f}\n30\n0.0\n11\n{en.get('x', 0.0):.4f}\n21\n{en.get('y', 0.0):.4f}\n31\n0.0\n")
 
-        # 4. Columns Below -> COLUMNS_BELOW (Point + Rectangular boundary box)
+        # 4. Columns Below -> COLUMNS_BELOW (Point + Boundary box)
         for col in self.prepared_data.get("columns", {}).get("below", []):
             loc = col.get("location", {})
             cx, cy = loc.get('x', 0.0), loc.get('y', 0.0)
             lines.append(f"0\nPOINT\n8\nCOLUMNS_BELOW\n10\n{cx:.4f}\n20\n{cy:.4f}\n30\n0.0\n")
-            # 0.4m x 0.4m column boundary box
-            lines.append("0\nPOLYLINE\n8\nCOLUMNS_BELOW\n66\n1\n70\n1\n")
+            lines.append("0\nLWPOLYLINE\n8\nCOLUMNS_BELOW\n90\n4\n70\n1\n")
             for dx, dy in [(-0.2, -0.2), (0.2, -0.2), (0.2, 0.2), (-0.2, 0.2)]:
-                lines.append(f"0\nVERTEX\n8\nCOLUMNS_BELOW\n10\n{cx+dx:.4f}\n20\n{cy+dy:.4f}\n30\n0.0\n")
-            lines.append("0\nSEQEND\n")
+                lines.append(f"10\n{cx+dx:.4f}\n20\n{cy+dy:.4f}\n")
 
-        # 5. Columns Above -> COLUMNS_ABOVE (Point + Rectangular boundary box)
+        # 5. Columns Above -> COLUMNS_ABOVE (Point + Boundary box)
         for col in self.prepared_data.get("columns", {}).get("above", []):
             loc = col.get("location", {})
             cx, cy = loc.get('x', 0.0), loc.get('y', 0.0)
             lines.append(f"0\nPOINT\n8\nCOLUMNS_ABOVE\n10\n{cx:.4f}\n20\n{cy:.4f}\n30\n0.0\n")
-            lines.append("0\nPOLYLINE\n8\nCOLUMNS_ABOVE\n66\n1\n70\n1\n")
+            lines.append("0\nLWPOLYLINE\n8\nCOLUMNS_ABOVE\n90\n4\n70\n1\n")
             for dx, dy in [(-0.2, -0.2), (0.2, -0.2), (0.2, 0.2), (-0.2, 0.2)]:
-                lines.append(f"0\nVERTEX\n8\nCOLUMNS_ABOVE\n10\n{cx+dx:.4f}\n20\n{cy+dy:.4f}\n30\n0.0\n")
-            lines.append("0\nSEQEND\n")
+                lines.append(f"10\n{cx+dx:.4f}\n20\n{cy+dy:.4f}\n")
 
         # 6. Walls Below -> WALLS_BELOW
         for wall in self.prepared_data.get("walls", {}).get("below", []):
             pts = wall.get("polygon", [])
             if len(pts) > 1:
-                lines.append("0\nPOLYLINE\n8\nWALLS_BELOW\n66\n1\n70\n0\n")
+                lines.append(f"0\nLWPOLYLINE\n8\nWALLS_BELOW\n90\n{len(pts)}\n70\n0\n")
                 for pt in pts:
-                    lines.append(f"0\nVERTEX\n8\nWALLS_BELOW\n10\n{pt['x']:.4f}\n20\n{pt['y']:.4f}\n30\n0.0\n")
-                lines.append("0\nSEQEND\n")
+                    lines.append(f"10\n{pt['x']:.4f}\n20\n{pt['y']:.4f}\n")
 
         # 7. Walls Above -> WALLS_ABOVE
         for wall in self.prepared_data.get("walls", {}).get("above", []):
             pts = wall.get("polygon", [])
             if len(pts) > 1:
-                lines.append("0\nPOLYLINE\n8\nWALLS_ABOVE\n66\n1\n70\n0\n")
+                lines.append(f"0\nLWPOLYLINE\n8\nWALLS_ABOVE\n90\n{len(pts)}\n70\n0\n")
                 for pt in pts:
-                    lines.append(f"0\nVERTEX\n8\nWALLS_ABOVE\n10\n{pt['x']:.4f}\n20\n{pt['y']:.4f}\n30\n0.0\n")
-                lines.append("0\nSEQEND\n")
+                    lines.append(f"10\n{pt['x']:.4f}\n20\n{pt['y']:.4f}\n")
 
         # 8. Loads -> SURFACE_LOADS, LINE_LOADS, POINT_LOADS
         loads_dict = self.prepared_data.get("loads", {})
@@ -336,14 +333,25 @@ class RAMConceptExporter:
         return "".join(lines)
 
     def _generate_cpt(self) -> str:
+        def safe_d(d):
+            return d if isinstance(d, dict) else {}
+
+        def safe_f(val, default=0.0):
+            if val is None:
+                return default
+            try:
+                return float(val)
+            except (ValueError, TypeError):
+                return default
+
         lines = [
             "// BENTLEY RAM CONCEPT STRUCTURAL MODEL EXCHANGER (.CPT)",
-            f"// Story Name: {self.prepared_data.get('story_name')}",
-            f"// Story Elevation: {self.prepared_data.get('elevation')} m",
+            f"// Story Name: {self.prepared_data.get('story_name', 'Unknown')}",
+            f"// Story Elevation: {safe_f(self.prepared_data.get('elevation'))} m",
             "BEGIN_MODEL",
             "  FORMAT = RAM_CONCEPT_V8",
-            f"  STORY = \"{self.prepared_data.get('story_name')}\"",
-            f"  ELEVATION = {self.prepared_data.get('elevation')}",
+            f"  STORY = \"{self.prepared_data.get('story_name', 'Unknown')}\"",
+            f"  ELEVATION = {safe_f(self.prepared_data.get('elevation'))}",
             "",
             "  BEGIN_MATERIALS"
         ]
@@ -354,59 +362,67 @@ class RAMConceptExporter:
         lines.append("\n  BEGIN_SLABS")
         for slab in self.prepared_data.get("slabs", []):
             color_str = f" COLOR=\"{slab.get('color')}\"" if slab.get('color') else ""
-            lines.append(f"    SLAB ID=\"{slab.get('id')}\" THICKNESS={slab.get('thickness')} MATERIAL=\"{slab.get('material')}\" PROPERTY=\"{slab.get('property')}\"{color_str}")
+            th = safe_f(slab.get('thickness'), 0.2)
+            mat = slab.get('material') or "Concrete"
+            prop = slab.get('property') or "Slab"
+            lines.append(f"    SLAB ID=\"{slab.get('id', 'SLAB')}\" THICKNESS={th} MATERIAL=\"{mat}\" PROPERTY=\"{prop}\"{color_str}")
             for pt in slab.get("polygon", []):
-                lines.append(f"      VERTEX X={pt.get('x', 0.0):.4f} Y={pt.get('y', 0.0):.4f}")
+                pt_d = safe_d(pt)
+                lines.append(f"      VERTEX X={safe_f(pt_d.get('x')):.4f} Y={safe_f(pt_d.get('y')):.4f}")
             lines.append("    END_SLAB")
         lines.append("  END_SLABS")
 
         lines.append("\n  BEGIN_OPENINGS")
         for op in self.prepared_data.get("openings", []):
-            lines.append(f"    OPENING ID=\"{op.get('id')}\"")
+            lines.append(f"    OPENING ID=\"{op.get('id', 'OP')}\"")
             for pt in op.get("polygon", []):
-                lines.append(f"      VERTEX X={pt.get('x', 0.0):.4f} Y={pt.get('y', 0.0):.4f}")
+                pt_d = safe_d(pt)
+                lines.append(f"      VERTEX X={safe_f(pt_d.get('x')):.4f} Y={safe_f(pt_d.get('y')):.4f}")
             lines.append("    END_OPENING")
         lines.append("  END_OPENINGS")
 
         lines.append("\n  BEGIN_COLUMNS")
-        for col in self.prepared_data.get("columns", {}).get("below", []):
-            loc = col.get("location", {})
+        cols = safe_d(self.prepared_data.get("columns"))
+        for col in cols.get("below", []):
+            loc = safe_d(col.get("location"))
             color_str = f" COLOR=\"{col.get('color')}\"" if col.get('color') else ""
-            lines.append(f"    COLUMN_BELOW ID=\"{col.get('id')}\" SECTION=\"{col.get('section')}\" X={loc.get('x', 0.0):.4f} Y={loc.get('y', 0.0):.4f}{color_str}")
-        for col in self.prepared_data.get("columns", {}).get("above", []):
-            loc = col.get("location", {})
+            lines.append(f"    COLUMN_BELOW ID=\"{col.get('id', 'COL')}\" SECTION=\"{col.get('section', 'COL')}\" X={safe_f(loc.get('x')):.4f} Y={safe_f(loc.get('y')):.4f}{color_str}")
+        for col in cols.get("above", []):
+            loc = safe_d(col.get("location"))
             color_str = f" COLOR=\"{col.get('color')}\"" if col.get('color') else ""
-            lines.append(f"    COLUMN_ABOVE ID=\"{col.get('id')}\" SECTION=\"{col.get('section')}\" X={loc.get('x', 0.0):.4f} Y={loc.get('y', 0.0):.4f}{color_str}")
+            lines.append(f"    COLUMN_ABOVE ID=\"{col.get('id', 'COL')}\" SECTION=\"{col.get('section', 'COL')}\" X={safe_f(loc.get('x')):.4f} Y={safe_f(loc.get('y')):.4f}{color_str}")
         lines.append("  END_COLUMNS")
 
         lines.append("\n  BEGIN_BEAMS")
         for bm in self.prepared_data.get("beams", []):
-            st, en = bm.get("start", {}), bm.get("end", {})
-            lines.append(f"    BEAM ID=\"{bm.get('id')}\" SECTION=\"{bm.get('section')}\" START_X={st.get('x', 0.0):.4f} START_Y={st.get('y', 0.0):.4f} END_X={en.get('x', 0.0):.4f} END_Y={en.get('y', 0.0):.4f}")
+            st, en = safe_d(bm.get("start")), safe_d(bm.get("end"))
+            lines.append(f"    BEAM ID=\"{bm.get('id', 'BM')}\" SECTION=\"{bm.get('section', 'BM')}\" START_X={safe_f(st.get('x')):.4f} START_Y={safe_f(st.get('y')):.4f} END_X={safe_f(en.get('x')):.4f} END_Y={safe_f(en.get('y')):.4f}")
         lines.append("  END_BEAMS")
 
         lines.append("\n  BEGIN_WALLS")
-        for w in self.prepared_data.get("walls", {}).get("below", []):
-            lines.append(f"    WALL_BELOW ID=\"{w.get('id')}\" THICKNESS={w.get('thickness')}")
+        walls = safe_d(self.prepared_data.get("walls"))
+        for w in walls.get("below", []):
+            lines.append(f"    WALL_BELOW ID=\"{w.get('id', 'WALL')}\" THICKNESS={safe_f(w.get('thickness'), 0.2)}")
             for pt in w.get("polygon", []):
-                lines.append(f"      VERTEX X={pt.get('x', 0.0):.4f} Y={pt.get('y', 0.0):.4f}")
+                pt_d = safe_d(pt)
+                lines.append(f"      VERTEX X={safe_f(pt_d.get('x')):.4f} Y={safe_f(pt_d.get('y')):.4f}")
             lines.append("    END_WALL")
-        for w in self.prepared_data.get("walls", {}).get("above", []):
-            lines.append(f"    WALL_ABOVE ID=\"{w.get('id')}\" THICKNESS={w.get('thickness')}")
+        for w in walls.get("above", []):
+            lines.append(f"    WALL_ABOVE ID=\"{w.get('id', 'WALL')}\" THICKNESS={safe_f(w.get('thickness'), 0.2)}")
             for pt in w.get("polygon", []):
-                lines.append(f"      VERTEX X={pt.get('x', 0.0):.4f} Y={pt.get('y', 0.0):.4f}")
+                pt_d = safe_d(pt)
+                lines.append(f"      VERTEX X={safe_f(pt_d.get('x')):.4f} Y={safe_f(pt_d.get('y')):.4f}")
             lines.append("    END_WALL")
         lines.append("  END_WALLS")
 
         lines.append("\n  BEGIN_LOADS")
-        loads_dict = self.prepared_data.get("loads", {})
-        if isinstance(loads_dict, dict):
-            for al in loads_dict.get("area", []):
-                lines.append(f"    SURFACE_LOAD ID=\"{al.get('id')}\" PATTERN=\"{al.get('pattern')}\" MAGNITUDE={al.get('magnitude')}")
-            for ll in loads_dict.get("line", []):
-                lines.append(f"    LINE_LOAD ID=\"{ll.get('id')}\" PATTERN=\"{ll.get('pattern')}\" MAGNITUDE={ll.get('magnitude')}")
-            for pl in loads_dict.get("point", []):
-                lines.append(f"    POINT_LOAD ID=\"{pl.get('id')}\" PATTERN=\"{pl.get('pattern')}\" FZ={pl.get('fz')}")
+        loads_dict = safe_d(self.prepared_data.get("loads"))
+        for al in loads_dict.get("area", []):
+            lines.append(f"    SURFACE_LOAD ID=\"{al.get('id', 'LOAD')}\" PATTERN=\"{al.get('pattern', 'DEAD')}\" MAGNITUDE={safe_f(al.get('magnitude'))}")
+        for ll in loads_dict.get("line", []):
+            lines.append(f"    LINE_LOAD ID=\"{ll.get('id', 'LOAD')}\" PATTERN=\"{ll.get('pattern', 'DEAD')}\" MAGNITUDE={safe_f(ll.get('magnitude'))}")
+        for pl in loads_dict.get("point", []):
+            lines.append(f"    POINT_LOAD ID=\"{pl.get('id', 'LOAD')}\" PATTERN=\"{pl.get('pattern', 'DEAD')}\" FZ={safe_f(pl.get('fz'))}")
         lines.append("  END_LOADS")
 
         lines.append("\nEND_MODEL\n")

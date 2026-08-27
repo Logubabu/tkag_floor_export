@@ -19,9 +19,9 @@ export const ExportModal: React.FC<ExportModalProps> = ({ isOpen, onClose }) => 
   if (!isOpen) return null;
 
   // Filter selected stories or default to currently viewed floor or all floors
-  const selectedStories = stories.filter((s) => selectedStoryIds.includes(s.id));
-  const floorsToExport = selectedStories.length > 0
-    ? selectedStories
+  const selectedStoriesFromCheckboxes = stories.filter((s) => selectedStoryIds.includes(s.id));
+  const floorsToExport = selectedStoriesFromCheckboxes.length > 0
+    ? selectedStoriesFromCheckboxes
     : (selectedStory ? [selectedStory] : stories);
 
   const handleDownloadPackage = async () => {
@@ -71,7 +71,7 @@ export const ExportModal: React.FC<ExportModalProps> = ({ isOpen, onClose }) => 
             <div>
               <h2 className="font-semibold text-slate-100 text-sm">RAM Concept Export Manager</h2>
               <p className="text-xs text-slate-400 font-mono">
-                Selected: <span className="text-cyan-400 font-bold">{selectedStories.length} Floor(s)</span>
+                Selected: <span className="text-cyan-400 font-bold">{floorsToExport.length} Floor(s)</span>
               </p>
             </div>
           </div>
@@ -90,11 +90,11 @@ export const ExportModal: React.FC<ExportModalProps> = ({ isOpen, onClose }) => 
             <div className="flex items-center justify-between">
               <h3 className="font-semibold text-slate-200 flex items-center gap-2">
                 <Layers className="w-4 h-4 text-cyan-400" />
-                Selected Floors to Extract ({selectedStories.length})
+                Selected Floors to Extract ({floorsToExport.length})
               </h3>
             </div>
             <div className="flex flex-wrap gap-1.5 pt-1">
-              {selectedStories.map((s) => (
+              {floorsToExport.map((s) => (
                 <span
                   key={s.id}
                   className="px-2.5 py-1 bg-cyan-950/60 border border-cyan-800/60 text-cyan-300 rounded-md font-mono text-[11px]"
@@ -199,9 +199,9 @@ export const ExportModal: React.FC<ExportModalProps> = ({ isOpen, onClose }) => 
         <div className="px-6 py-4 border-t border-slate-800 bg-slate-950/50 flex justify-between items-center gap-3">
           <button
             onClick={async () => {
-              if (selectedStories.length === 0) return alert('Select a story first.');
+              if (floorsToExport.length === 0) return alert('Select a story first.');
               try {
-                const sName = selectedStories[0].name;
+                const sName = floorsToExport[0].name;
                 const batchRes = await api.extractBatchFloors(activeProjectId, [sName], useStore.getState().extractionMode);
                 const fid = batchRes.extracted_floors[0].floor_id;
                 const pushRes = await api.exportLiveRamConcept(activeProjectId, fid);
@@ -210,7 +210,7 @@ export const ExportModal: React.FC<ExportModalProps> = ({ isOpen, onClose }) => 
                 alert(e.message || 'Failed to push to RAM Concept COM session.');
               }
             }}
-            disabled={selectedStories.length === 0}
+            disabled={floorsToExport.length === 0}
             className="px-4 py-2 bg-emerald-950/80 hover:bg-emerald-900 border border-emerald-800 text-emerald-300 text-xs font-semibold rounded-lg transition"
             title="Push selected floor directly into active RAM Concept application via COM API"
           >
@@ -225,14 +225,14 @@ export const ExportModal: React.FC<ExportModalProps> = ({ isOpen, onClose }) => 
             </button>
             <button
               onClick={handleDownloadPackage}
-              disabled={isExporting || selectedStories.length === 0}
+              disabled={isExporting || floorsToExport.length === 0}
               className="px-5 py-2 bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 disabled:opacity-50 text-white text-xs font-semibold rounded-lg transition shadow-lg shadow-cyan-950/50 flex items-center gap-2"
             >
               <Download className="w-4 h-4" />
               <span>
                 {isExporting
                   ? 'Preparing ZIP Package...'
-                  : `Download Package (${selectedStories.length} Floor${selectedStories.length > 1 ? 's' : ''})`}
+                  : `Download Package (${floorsToExport.length} Floor${floorsToExport.length > 1 ? 's' : ''})`}
               </span>
             </button>
           </div>

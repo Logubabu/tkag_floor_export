@@ -4,8 +4,21 @@ import logging
 import time
 from typing import Dict, Any, Optional
 
-from conversionagent.etabs.client import ETABSAdapter
-from conversionagent.ramconcept.client import RAMConceptAdapter
+AGENT_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+REPO_ROOT = os.path.abspath(os.path.join(AGENT_DIR, ".."))
+BACKEND_DIR = os.path.join(REPO_ROOT, "backend")
+
+for p in [AGENT_DIR, REPO_ROOT, BACKEND_DIR]:
+    if p not in sys.path:
+        sys.path.insert(0, p)
+
+try:
+    from etabs.client import ETABSAdapter
+    from ramconcept.client import RAMConceptAdapter
+except ModuleNotFoundError:
+    from conversionagent.etabs.client import ETABSAdapter
+    from conversionagent.ramconcept.client import RAMConceptAdapter
+
 from app.geometry.comparison import GeometryComparisonEngine
 from app.models.intermediate import FloorModel, ExtractionMode
 

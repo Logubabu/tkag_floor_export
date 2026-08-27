@@ -64,9 +64,6 @@ class FloorExtractor:
                 if is_story_match(fr.story) or (abs(fr.start_point.z - story_elev) < elev_tol and abs(fr.end_point.z - story_elev) < elev_tol):
                     beams.append(fr)
 
-        if not beams and model.frames:
-            beams = [fr for fr in model.frames if fr.type == FrameType.BEAM]
-
         # 4. Mode A — Slab Only return
         if mode == ExtractionMode.SLAB_ONLY:
             return FloorModel(
@@ -94,9 +91,6 @@ class FloorExtractor:
                 elif min_z < story_elev < max_z:
                     columns_below.append(fr)
 
-        if not columns_below and not columns_above and model.frames:
-            columns_below = [fr for fr in model.frames if fr.type == FrameType.COLUMN]
-
         # 6. Extract Walls Above and Below
         walls_above: List[Wall] = []
         walls_below: List[Wall] = []
@@ -110,9 +104,6 @@ class FloorExtractor:
                 walls_above.append(w)
             elif min_z < story_elev < max_z:
                 walls_below.append(w)
-
-        if not walls_below and not walls_above and model.walls:
-            walls_below = list(model.walls)
 
         # 7. Extract Nodes on floor level
         floor_nodes: List[Node] = []

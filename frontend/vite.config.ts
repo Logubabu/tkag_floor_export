@@ -13,5 +13,18 @@ export default defineConfig({
         changeOrigin: true,
       }
     }
+  },
+  build: {
+    chunkSizeWarningLimit: 1600,
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          three: ['three'],
+          'react-three': ['@react-three/fiber', '@react-three/drei'],
+          icons: ['lucide-react'],
+          vendor: ['react', 'react-dom', 'zustand']
+        }
+      }
+    }
   }
 })

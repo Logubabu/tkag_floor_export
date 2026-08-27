@@ -123,3 +123,55 @@ class GeometryProcessor:
             normalized_slabs.append(norm_slab)
 
         return normalized_slabs, offset
+
+    @staticmethod
+    def find_rotation_matrix(src_vec: Tuple[float, float], dest_vec: Tuple[float, float]) -> np.ndarray:
+        """
+        Calculates 2D rotation matrix from source vector to destination vector matching reference bridge (misc_utils.py).
+        """
+        v_src = np.array(src_vec, dtype=float)
+        v_dest = np.array(dest_vec, dtype=float)
+        norm_src = np.linalg.norm(v_src)
+        norm_dest = np.linalg.norm(v_dest)
+        if norm_src < 1e-8 or norm_dest < 1e-8:
+            return np.eye(2)
+        unit_src = v_src / norm_src
+        unit_dest = v_dest / norm_dest
+        cos_theta = float(np.dot(unit_src, unit_dest))
+        sin_theta = float(np.linalg.det(np.array([unit_src, unit_dest])))
+        return np.around(np.array([[cos_theta, -sin_theta], [sin_theta, cos_theta]]))
+
+    @staticmethod
+    def calibrate_coordinates(
+        src_pt1: Tuple[float, float],
+        src_pt2: Tuple[float, float],
+        dest_pt1: Tuple[float, float],
+        dest_pt2: Tuple[float, float]
+    ) -> Tuple[List[List[float]], List[float]]:
+        """
+        Calculates rotation matrix and translation vector mapping src coordinate system (e.g. ETABS)
+        to dest coordinate system (e.g. RAM Concept) given 2 matching benchmark points.
+        """
+        src_vec = (src_pt2[0] - src_pt1[0], src_pt2[1] - src_pt1[1])
+        dest_vec = (dest_pt2[0] - dest_pt1[0], dest_pt2[1] - dest_pt1[1])
+        rot_matrix = GeometryProcessor.find_rotation_matrix(src_vec, dest_vec)
+        src_pt1_rot = rot_matrix @ np.array(src_pt1, dtype=float)
+        delta_translation = (np.array(dest_pt1, dtype=float) - src_pt1_rot).tolist()
+        return rot_matrix.tolist(), delta_translation
+
+    @staticmethod
+    def transform_point_2d(
+        x: float,
+        y: float,
+        rotation_matrix: List[List[float]],
+        translation: List[float]
+    ) -> Tuple[float, float]:
+        """
+        Transforms a 2D point (x, y) using a 2x2 rotation matrix and 2D translation vector.
+        """
+        rot = np.array(rotation_matrix, dtype=float)
+        trans = np.array(translation, dtype=float)
+        pt = np.array([x, y], dtype=float)
+        transformed = (rot @ pt) + trans
+        return float(transformed[0]), float(transformed[1])
+

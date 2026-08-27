@@ -184,46 +184,48 @@ class ETABSCOMAdapter:
         except Exception as e:
             print(f"Warning extracting points via COM: {e}")
 
-        # 6. Frame Objects (Beams & Columns)
+        # 6. Frame Objects (Beams & Columns) via GetAllFrames (Matching reference ETABS_utils.py)
         try:
-            res = self.SapModel.FrameObj.GetNameList()
+            res = self.SapModel.FrameObj.GetAllFrames(
+                0, [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], []
+            )
             if res and res[0] == 0 and res[1] > 0:
-                frame_names = res[2]
-                for fr_name in frame_names:
-                    pt_res = self.SapModel.FrameObj.GetPoints(fr_name)
-                    sec_res = self.SapModel.FrameObj.GetSection(fr_name)
-                    if pt_res and pt_res[0] == 0:
-                        p1_id, p2_id = pt_res[1], pt_res[2]
-                        sec_name = sec_res[1] if sec_res and sec_res[0] == 0 else "DEFAULT"
-                        
-                        p1_node = b_model.nodes.get(p1_id)
-                        p2_node = b_model.nodes.get(p2_id)
-                        
-                        if p1_node and p2_node:
-                            # Frame orientation check
-                            is_column = abs(p1_node.x - p2_node.x) < 0.01 and abs(p1_node.y - p2_node.y) < 0.01
-                            f_type = FrameType.COLUMN if is_column or "COL" in sec_name.upper() else FrameType.BEAM
-                            
-                            # Determine story
-                            max_z = max(p1_node.z, p2_node.z)
-                            assigned_story = "Level 1"
-                            for st in b_model.stories:
-                                if abs(st.elevation - max_z) < 0.1:
-                                    assigned_story = st.name
-                                    break
-                            
-                            b_model.frames.append(Frame(
-                                id=fr_name,
-                                type=f_type,
-                                start_node=p1_id,
-                                end_node=p2_id,
-                                start_point=Point3D(x=p1_node.x, y=p1_node.y, z=p1_node.z),
-                                end_point=Point3D(x=p2_node.x, y=p2_node.y, z=p2_node.z),
-                                section=sec_name,
-                                story=assigned_story
-                            ))
+                (
+                    ret, num_names, my_names, prop_names, story_names,
+                    point1_names, point2_names, p1_x, p1_y, p1_z, p2_x, p2_y, p2_z,
+                    angles, off1_x, off2_x, off1_y, off2_y, off1_z, off2_z, cardinal_points
+                ) = res[:21]
+
+                for i in range(num_names):
+                    fr_name = str(my_names[i])
+                    sec_name = str(prop_names[i])
+                    st_name = str(story_names[i])
+                    p1_id = str(point1_names[i])
+                    p2_id = str(point2_names[i])
+
+                    x1, y1, z1 = float(p1_x[i]), float(p1_y[i]), float(p1_z[i])
+                    x2, y2, z2 = float(p2_x[i]), float(p2_y[i]), float(p2_z[i])
+
+                    # Column identification matching reference find_columns (Point1X == Point2X and Point1Y == Point2Y)
+                    is_column = (abs(x1 - x2) < 1e-4 and abs(y1 - y2) < 1e-4)
+                    f_type = FrameType.COLUMN if is_column or "COL" in sec_name.upper() else FrameType.BEAM
+
+                    b_model.frames.append(Frame(
+                        id=fr_name,
+                        type=f_type,
+                        start_node=p1_id,
+                        end_node=p2_id,
+                        start_point=Point3D(x=x1, y=y1, z=z1),
+                        end_point=Point3D(x=x2, y=y2, z=z2),
+                        section=sec_name,
+                        story=st_name,
+                        angle=float(angles[i]) if angles else 0.0,
+                        offset_1=Point3D(x=float(off1_x[i]), y=float(off1_y[i]), z=float(off1_z[i])),
+                        offset_2=Point3D(x=float(off2_x[i]), y=float(off2_y[i]), z=float(off2_z[i])),
+                        cardinal_point=int(cardinal_points[i]) if cardinal_points else 10
+                    ))
         except Exception as e:
-            print(f"Warning extracting frames via COM: {e}")
+            print(f"Warning extracting frames via COM GetAllFrames: {e}")
 
         # 7. Area Objects (Slabs, Openings, Walls)
         try:
@@ -276,3 +278,48 @@ class ETABSCOMAdapter:
             print(f"Warning extracting areas via COM: {e}")
 
         return b_model
+
+    def extract_column_axial_forces(self, story_name: str, load_cases: List[str]) -> Dict[str, float]:
+        """
+        Queries max axial force P for all columns at a given story for the specified load cases.
+        Summation across load cases is applied if multiple load cases are specified.
+        Returns a mapping from frame_id -> total_p_axial force.
+        """
+        if not self.is_connected or not self.SapModel:
+            return {}
+
+        results = self.SapModel.Results
+        setup = results.Setup
+        column_forces: Dict[str, float] = {}
+
+        # 1. Identify frame IDs corresponding to columns at the requested story
+        b_model = self.extract_model()
+        target_columns = [
+            f for f in b_model.frames
+            if f.type == FrameType.COLUMN and (not story_name or f.story == story_name)
+        ]
+
+        if not target_columns:
+            return {}
+
+        # 2. Iterate through requested load cases
+        for lc in load_cases:
+            try:
+                setup.DeselectAllCasesAndCombosForOutput()
+                setup.SetCaseSelectedForOutput(lc)
+            except Exception as e:
+                print(f"Warning setting output case {lc}: {e}")
+                continue
+
+            for col in target_columns:
+                try:
+                    res = results.FrameForce(col.id, 0, 0, [], [], [], [], [], [], [], [], [], [], [], [], [])
+                    if res and res[0] == 0 and len(res) > 9 and res[9]:
+                        p_forces = res[9]
+                        max_p = abs(min(p_forces))
+                        column_forces[col.id] = column_forces.get(col.id, 0.0) + max_p
+                except Exception as e:
+                    print(f"Error querying FrameForce for column {col.id}: {e}")
+
+        return column_forces
+

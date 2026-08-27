@@ -45,16 +45,16 @@ class E2KParser:
         # Decompress zlib streams if present inside binary EDB file
         decompressed_texts: List[str] = []
         # Search for zlib magic headers (0x78 0x9c, 0x78 0x01, 0x78 0xda)
-        for offset in range(len(raw_bytes) - 4):
-            if raw_bytes[offset:offset+2] in (b'\x78\x9c', b'\x78\x01', b'\x78\xda'):
-                try:
-                    decompressed = zlib.decompress(raw_bytes[offset:offset+1000000])
-                    if decompressed:
-                        txt = decompressed.decode("latin1", errors="ignore")
-                        if "$ STORIES" in txt or "STORIES - IN SEQUENCE" in txt or "STORY" in txt:
-                            decompressed_texts.append(txt)
-                except Exception:
-                    pass
+        for match in re.finditer(rb'\x78[\x9c\x01\xda]', raw_bytes):
+            offset = match.start()
+            try:
+                decompressed = zlib.decompress(raw_bytes[offset:offset+1000000])
+                if decompressed:
+                    txt = decompressed.decode("latin1", errors="ignore")
+                    if "$ STORIES" in txt or "STORIES - IN SEQUENCE" in txt or "STORY" in txt:
+                        decompressed_texts.append(txt)
+            except Exception:
+                pass
 
         # Try multi-encoding decodes for embedded text table streams (Latin-1, UTF-8, UTF-16-LE)
         decoded_texts: List[str] = list(decompressed_texts)
@@ -68,7 +68,7 @@ class E2KParser:
 
         # 1. Check if embedded $ET / .E2K text table section exists inside EDB stream or decompressed blocks
         for text in decoded_texts:
-            start = next((text.find(marker) for marker in ("$ STORIES", "$ CONTROLS", "STORIES - IN SEQUENCE") if text.find(marker) >= 0), -1)
+            start = next((text.find(marker) for marker in ("$ PROGRAM INFORMATION", "$ CONTROLS", "$ STORIES", "STORIES - IN SEQUENCE") if text.find(marker) >= 0), -1)
             if start >= 0:
                 parser = E2KParser()
                 model = parser.parse_string(text[start:])
@@ -336,9 +336,16 @@ class E2KParser:
 
     def _parse_controls(self, line: str):
         if "UNITS" in line:
-            parts = [p.strip('"') for p in re.findall(r'"([^"]*)"', line)]
-            if len(parts) >= 2:
-                self.model.units = UnitSystem(length=parts[1] if len(parts)>1 else "m", force=parts[0] if len(parts)>0 else "kN")
+            # Handle both quoted ('UNITS "KN" "M" "C"') and unquoted ('UNITS KN M C')
+            matches = re.findall(r'"([^"]*)"|\'([^\']*)\'|(\S+)', line)
+            tokens = []
+            for m in matches:
+                val = (m[0] or m[1] or m[2]).strip('"\' ').strip()
+                if val and val.upper() != "UNITS":
+                    tokens.append(val)
+            if len(tokens) >= 2:
+                # ETABS standard UNITS order: Force, Length, Temperature (e.g. KN, M, C or KIP, IN, F)
+                self.model.units = UnitSystem(force=tokens[0], length=tokens[1])
 
     def _parse_story(self, line: str):
         if not line.startswith("STORY"):
@@ -476,6 +483,31 @@ class E2KParser:
             else:
                 self.line_types[frame_id] = "Beam"
 
+    def _resolve_story_name(self, line: str, tokens: List[str], default_story: str = "Level 1") -> str:
+        story_match = re.search(r'STORY\s+(?:"([^"]+)"|([A-Za-z0-9_ -]+))', line, re.IGNORECASE)
+        if story_match:
+            return (story_match.group(1) or story_match.group(2)).strip()
+
+        if self.model.stories:
+            story_map_lower = {st.name.lower(): st.name for st in self.model.stories}
+            story_map_norm = {st.name.lower().replace(" ", "").replace("_", "").replace("-", ""): st.name for st in self.model.stories}
+
+            for tok in tokens:
+                t_clean = tok.strip('"').strip()
+                t_lower = t_clean.lower()
+                t_norm = t_lower.replace(" ", "").replace("_", "").replace("-", "")
+                if t_lower in story_map_lower:
+                    return story_map_lower[t_lower]
+                if t_norm in story_map_norm:
+                    return story_map_norm[t_norm]
+
+        if len(tokens) >= 3:
+            cand = tokens[2].strip('"').strip()
+            if cand.upper() not in ["SECTION", "PROPERTY", "TYPE", "POINT", "COLOR", "PIER", "SPANDREL", "DIAPH", "CARDINALPOINT", "ANG", "MINNUMSTA", "AUTOMESH", "MESHATINTERSECTIONS", "AREA", "LINE", "PANEL", "FLOOR", "SLAB", "WALL"]:
+                return cand
+
+        return default_story
+
     def _parse_line_assign(self, line: str):
         if not (line.startswith("LINE") or line.startswith("LINEASSIGN") or line.startswith("LINECONNECTIVITY")):
             return
@@ -484,27 +516,32 @@ class E2KParser:
             return
         frame_id = tokens[1] if tokens[0].upper() in ["LINE", "LINEASSIGN", "LINECONNECTIVITY"] else tokens[0]
 
-        story_match = re.search(r'STORY\s+(?:"([^"]+)"|([A-Za-z0-9_ -]+))', line, re.IGNORECASE)
-        story_name = (story_match.group(1) or story_match.group(2)).strip() if story_match else "Level 1"
+        story_name = self._resolve_story_name(line, tokens)
 
         sec_match = re.search(r'SECTION\s+(?:"([^"]+)"|([A-Za-z0-9_ -]+))', line, re.IGNORECASE)
         sec_name = (sec_match.group(1) or sec_match.group(2)).strip() if sec_match else "DEFAULT"
 
         (p1_id, p2_id) = self.line_nodes.get(frame_id, ("N1", "N2"))
-        p1_node = self.model.nodes.get(p1_id, Node(id=p1_id, x=0, y=0, z=0))
-        p2_node = self.model.nodes.get(p2_id, Node(id=p2_id, x=0, y=0, z=0))
+        p1_node = self.model.nodes.get(p1_id, None)
+        p2_node = self.model.nodes.get(p2_id, None)
 
         f_type_str = self.line_types.get(frame_id, "Column" if "C" in frame_id or "COL" in sec_name.upper() else "Beam")
         f_type = FrameType.COLUMN if f_type_str.lower() == "column" else FrameType.BEAM
         frame_color = self.model.frame_sections[sec_name].color if sec_name in self.model.frame_sections else None
+
+        st_match = next((st for st in self.model.stories if st.name.lower() == story_name.lower()), None)
+        st_elev = st_match.elevation if st_match else 0.0
+
+        p1_z = p1_node.z if (p1_node and p1_node.z != 0.0) else st_elev
+        p2_z = p2_node.z if (p2_node and p2_node.z != 0.0) else st_elev
 
         self.model.frames.append(Frame(
             id=f"{frame_id}_{story_name}",
             type=f_type,
             start_node=p1_id,
             end_node=p2_id,
-            start_point=Point3D(x=p1_node.x, y=p1_node.y, z=p1_node.z),
-            end_point=Point3D(x=p2_node.x, y=p2_node.y, z=p2_node.z),
+            start_point=Point3D(x=p1_node.x if p1_node else 0.0, y=p1_node.y if p1_node else 0.0, z=p1_z),
+            end_point=Point3D(x=p2_node.x if p2_node else 0.0, y=p2_node.y if p2_node else 0.0, z=p2_z),
             section=sec_name,
             story=story_name,
             color=frame_color
@@ -531,8 +568,7 @@ class E2KParser:
             return
         area_id = tokens[1] if tokens[0].upper() in ["AREA", "AREAASSIGN", "AREACONNECTIVITY"] else tokens[0]
 
-        story_match = re.search(r'STORY\s+(?:"([^"]+)"|([A-Za-z0-9_ -]+))', line, re.IGNORECASE)
-        story_name = (story_match.group(1) or story_match.group(2)).strip() if story_match else "Level 1"
+        story_name = self._resolve_story_name(line, tokens)
 
         sec_match = re.search(r'(?:SECTION|PROPERTY)\s+(?:"([^"]+)"|([A-Za-z0-9_ -]+))', line, re.IGNORECASE)
         prop_name = (sec_match.group(1) or sec_match.group(2)).strip() if sec_match else "SLAB"
@@ -542,6 +578,11 @@ class E2KParser:
         polygon = [Point2D(x=self.model.nodes[pid].x, y=self.model.nodes[pid].y) for pid in pt_ids if pid in self.model.nodes]
         z_coords = [self.model.nodes[pid].z for pid in pt_ids if pid in self.model.nodes]
         avg_z = sum(z_coords) / len(z_coords) if z_coords else 0.0
+
+        if (avg_z == 0.0 or not z_coords) and story_name:
+            st_match = next((st for st in self.model.stories if st.name.lower() == story_name.lower()), None)
+            if st_match:
+                avg_z = st_match.elevation
 
         thick = 0.25
         prop_color = None
@@ -602,87 +643,93 @@ class E2KParser:
             ))
 
     def _post_process(self):
-        # 1. Calculate cumulative story elevations if missing or default 0
+        # 1. Calculate cumulative story elevations if missing or partially zero
         if self.model.stories:
-            if all(st.elevation == 0.0 for st in self.model.stories):
-                cum = 0.0
-                for st in reversed(self.model.stories):
-                    cum += st.height if st.height > 0 else 3.5
-                    st.elevation = round(cum, 2)
+            zero_count = sum(1 for st in self.model.stories if st.elevation == 0.0)
+            if zero_count > 1 or (zero_count == len(self.model.stories) - 1 and len(self.model.stories) > 2):
+                # If stories are listed top-to-bottom (Base at end)
+                bottom_st = self.model.stories[-1]
+                top_st = self.model.stories[0]
+                if "base" in bottom_st.name.lower() or "ground" in bottom_st.name.lower() or bottom_st.elevation < top_st.elevation:
+                    cum = bottom_st.elevation
+                    for st in reversed(self.model.stories[:-1]):
+                        cum += st.height if st.height > 0 else 3.5
+                        st.elevation = round(cum, 2)
+                else:
+                    cum = 0.0
+                    for st in self.model.stories:
+                        if st.elevation != 0.0:
+                            cum = st.elevation
+                        else:
+                            cum += st.height if st.height > 0 else 3.5
+                            st.elevation = round(cum, 2)
 
-        # 2. Ensure every upper story has a slab polygon for complete 3D floor rendering
-        if self.model.stories:
-            # Determine baseline reference polygon from existing slabs or nodes
-            ref_poly = None
-            if self.model.slabs:
-                for sl in self.model.slabs:
-                    if sl.polygon and len(sl.polygon) >= 3:
-                        ref_poly = sl.polygon
-                        break
+            story_info = {st.name.strip().lower(): (st.elevation, st.height if st.height > 0 else 3.5) for st in self.model.stories}
 
-            if not ref_poly and self.model.nodes:
-                xs = [n.x for n in self.model.nodes.values() if n.x is not None]
-                ys = [n.y for n in self.model.nodes.values() if n.y is not None]
-                if xs and ys:
-                    min_x, max_x = min(xs), max(xs)
-                    min_y, max_y = min(ys), max(ys)
-                    if abs(max_x - min_x) > 1.0 and abs(max_y - min_y) > 1.0:
-                        ref_poly = [Point2D(x=min_x, y=min_y), Point2D(x=max_x, y=min_y), Point2D(x=max_x, y=max_y), Point2D(x=min_x, y=max_y)]
+            # Map calculated story elevations and Z coordinates to Slabs
+            for sl in self.model.slabs:
+                if sl.story and sl.story.strip().lower() in story_info:
+                    top, _ = story_info[sl.story.strip().lower()]
+                    sl.elevation = top
 
-            if not ref_poly:
-                ref_poly = [Point2D(x=0.0, y=0.0), Point2D(x=24.0, y=0.0), Point2D(x=24.0, y=18.0), Point2D(x=0.0, y=18.0)]
+            # Map calculated story elevations and Z coordinates to Frames (Beams & Columns)
+            for fr in self.model.frames:
+                if fr.story and fr.story.strip().lower() in story_info:
+                    top, height = story_info[fr.story.strip().lower()]
+                    bot = round(top - height, 2)
+                    if fr.type == FrameType.COLUMN:
+                        fr.start_point.z = bot
+                        fr.end_point.z = top
+                    else:
+                        if fr.start_point.z == 0.0 or fr.start_point.z is None:
+                            fr.start_point.z = top
+                        if fr.end_point.z == 0.0 or fr.end_point.z is None:
+                            fr.end_point.z = top
 
+            # Map calculated story elevations and Z coordinates to Walls
+            for w in self.model.walls:
+                if w.story and w.story.strip().lower() in story_info:
+                    top, height = story_info[w.story.strip().lower()]
+                    w.top_z = top
+                    w.bottom_z = round(top - height, 2)
+
+        # 2. Only add fallback slabs if model contains zero slabs
+        if self.model.stories and len(self.model.slabs) == 0:
+            ref_poly = [Point2D(x=0.0, y=0.0), Point2D(x=24.0, y=0.0), Point2D(x=24.0, y=18.0), Point2D(x=0.0, y=18.0)]
             for st in self.model.stories:
                 if st.name.lower() in ["base", "bottom", "ground_0"]:
                     continue
+                self.model.slabs.append(Slab(
+                    id=f"slab_auto_{st.name.lower().replace(' ', '_')}",
+                    story=st.name,
+                    polygon=ref_poly,
+                    thickness=0.25,
+                    property_name="Slab250",
+                    is_opening=False,
+                    elevation=st.elevation
+                ))
 
-                story_clean = st.name.strip().lower().replace(" ", "").replace("_", "").replace("-", "")
-                has_slab = any(
-                    sl.story and sl.story.strip().lower().replace(" ", "").replace("_", "").replace("-", "") == story_clean
-                    or abs(sl.elevation - st.elevation) < 0.5
-                    for sl in self.model.slabs
-                )
-
-                if not has_slab:
-                    self.model.slabs.append(Slab(
-                        id=f"slab_auto_{st.name.lower().replace(' ', '_')}",
+        # 3. Only add fallback beams if model contains zero frames
+        if self.model.stories and len(self.model.frames) == 0:
+            ref_poly = [Point2D(x=0.0, y=0.0), Point2D(x=24.0, y=0.0), Point2D(x=24.0, y=18.0), Point2D(x=0.0, y=18.0)]
+            for st in self.model.stories:
+                if st.name.lower() in ["base", "bottom", "ground_0"]:
+                    continue
+                matching_slabs = [sl for sl in self.model.slabs if sl.story and sl.story.strip().lower() == st.name.strip().lower()]
+                target_slab = matching_slabs[0] if matching_slabs else None
+                pts = target_slab.polygon if target_slab else ref_poly
+                for i in range(len(pts)):
+                    p_a = pts[i]
+                    p_b = pts[(i + 1) % len(pts)]
+                    sp = Point3D(x=p_a.x, y=p_a.y, z=st.elevation)
+                    ep = Point3D(x=p_b.x, y=p_b.y, z=st.elevation)
+                    self.model.frames.append(Frame(
+                        id=f"bm_auto_{st.name.lower().replace(' ', '_')}_{i}",
                         story=st.name,
-                        polygon=ref_poly,
-                        thickness=0.25,
-                        property_name="Slab250",
-                        is_opening=False,
-                        elevation=st.elevation
+                        type=FrameType.BEAM,
+                        section="B300x600",
+                        start_node=f"n_auto_{st.name.lower().replace(' ', '_')}_{i}",
+                        end_node=f"n_auto_{st.name.lower().replace(' ', '_')}_{(i+1)%len(pts)}",
+                        start_point=sp,
+                        end_point=ep
                     ))
-
-            # 3. Ensure perimeter beams and columns exist for every story level
-            for st in self.model.stories:
-                if st.name.lower() in ["base", "bottom", "ground_0"]:
-                    continue
-
-                story_clean = st.name.strip().lower().replace(" ", "").replace("_", "").replace("-", "")
-                has_beam = any(
-                    fr.story and fr.story.strip().lower().replace(" ", "").replace("_", "").replace("-", "") == story_clean
-                    or (abs(fr.start_point.z - st.elevation) < 0.5 and abs(fr.end_point.z - st.elevation) < 0.5)
-                    for fr in self.model.frames if fr.type == FrameType.BEAM
-                )
-
-                if not has_beam:
-                    matching_slabs = [sl for sl in self.model.slabs if sl.story and sl.story.strip().lower().replace(" ", "").replace("_", "").replace("-", "") == story_clean or abs(sl.elevation - st.elevation) < 0.5]
-                    target_slab = matching_slabs[0] if matching_slabs else None
-                    pts = target_slab.polygon if target_slab else ref_poly
-
-                    for i in range(len(pts)):
-                        p_a = pts[i]
-                        p_b = pts[(i + 1) % len(pts)]
-                        sp = Point3D(x=p_a.x, y=p_a.y, z=st.elevation)
-                        ep = Point3D(x=p_b.x, y=p_b.y, z=st.elevation)
-                        self.model.frames.append(Frame(
-                            id=f"bm_auto_{st.name.lower().replace(' ', '_')}_{i}",
-                            story=st.name,
-                            type=FrameType.BEAM,
-                            section="B300x600",
-                            start_node=f"n_auto_{st.name.lower().replace(' ', '_')}_{i}",
-                            end_node=f"n_auto_{st.name.lower().replace(' ', '_')}_{(i+1)%len(pts)}",
-                            start_point=sp,
-                            end_point=ep
-                        ))

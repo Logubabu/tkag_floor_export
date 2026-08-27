@@ -83,6 +83,10 @@ class Frame(BaseModel):
     story: str
     material: Optional[str] = None
     color: Optional[str] = None
+    angle: float = 0.0
+    offset_1: Point3D = Field(default_factory=lambda: Point3D(x=0.0, y=0.0, z=0.0))
+    offset_2: Point3D = Field(default_factory=lambda: Point3D(x=0.0, y=0.0, z=0.0))
+    cardinal_point: int = 10
 
 
 class Slab(BaseModel):

@@ -21,6 +21,7 @@ interface ModelViewerPageProps {
 export const ModelViewerPage: React.FC<ModelViewerPageProps> = () => {
   const {
     activeProjectId,
+    setProjectId,
     setStories,
     setSelectedStory,
     setFloorModel,
@@ -39,17 +40,17 @@ export const ModelViewerPage: React.FC<ModelViewerPageProps> = () => {
   const [isExportedFilesOpen, setIsExportedFilesOpen] = useState(false);
 
   const loadFullModelAndStories = async () => {
-    if (!activeProjectId) {
-      setStories([]);
-      setSelectedStory(null);
-      setFloorModel(null);
-      setValidationResult(null);
-      setFullBuildingModel(null);
+    const targetId = activeProjectId || sessionStorage.getItem('active_project_id') || '';
+    if (!targetId) {
       return;
     }
 
+    if (!activeProjectId && targetId) {
+      setProjectId(targetId);
+    }
+
     try {
-      const fetchedStories = await api.getStories(activeProjectId);
+      const fetchedStories = await api.getStories(targetId);
       if (Array.isArray(fetchedStories) && fetchedStories.length > 0) {
         setStories(fetchedStories);
 
@@ -59,7 +60,7 @@ export const ModelViewerPage: React.FC<ModelViewerPageProps> = () => {
       }
 
       try {
-        const bModel = await api.getBuildingModel(activeProjectId);
+        const bModel = await api.getBuildingModel(targetId);
         if (bModel) {
           setFullBuildingModel(bModel);
           setViewMode('full');
@@ -77,7 +78,7 @@ export const ModelViewerPage: React.FC<ModelViewerPageProps> = () => {
     }
   };
 
-  // Load project stories & building model on mount only if activeProjectId is set
+  // Load project stories & building model on mount or activeProjectId change
   useEffect(() => {
     loadFullModelAndStories();
   }, [activeProjectId]);
@@ -141,7 +142,7 @@ export const ModelViewerPage: React.FC<ModelViewerPageProps> = () => {
 
         {/* Center Viewport: Interactive 3D Three.js Model */}
         <div className="flex-1 relative h-full">
-          <StructuralViewer />
+          <StructuralViewer onSelectFloor={handleSelectFloor} />
         </div>
 
         {/* Right Sidebar: Property Inspector */}
