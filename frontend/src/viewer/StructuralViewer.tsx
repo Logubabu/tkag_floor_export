@@ -6,27 +6,28 @@ import { useStore } from '../store/useStore';
 import { Slab, Frame, Wall, Node, AreaLoad, PointLoad, LineLoad } from '../types';
 
 // Camera controller helper to position camera dynamically based on model bounds
-function CameraPresetController({ cameraView, bounds }: { cameraView: string; bounds: { centerX: number; centerY: number; size: number } }) {
+function CameraPresetController({ cameraView, bounds }: { cameraView: string; bounds: { centerX: number; centerY: number; centerZ: number; size: number } }) {
   const { camera, controls } = useThree();
 
   React.useEffect(() => {
-    const { centerX, centerY, size } = bounds;
+    const { centerX, centerY, centerZ, size } = bounds;
     const dist = Math.max(size * 1.2, 15);
+    const targetY = centerZ || 0;
 
     if (controls) {
-      (controls as any).target.set(centerX, 0, centerY);
+      (controls as any).target.set(centerX, targetY, centerY);
     }
 
     if (cameraView === 'top' || cameraView === 'wireframe') {
-      camera.position.set(centerX, dist * 1.6, centerY + 0.001);
+      camera.position.set(centerX, targetY + dist * 1.6, centerY + 0.001);
     } else if (cameraView === 'front') {
-      camera.position.set(centerX, dist * 0.4, centerY + dist * 1.3);
+      camera.position.set(centerX, targetY + dist * 0.4, centerY + dist * 1.3);
     } else if (cameraView === 'side') {
-      camera.position.set(centerX + dist * 1.3, dist * 0.4, centerY);
+      camera.position.set(centerX + dist * 1.3, targetY + dist * 0.4, centerY);
     } else if (cameraView === 'iso') {
-      camera.position.set(centerX + dist * 0.9, dist * 0.9, centerY + dist * 0.9);
+      camera.position.set(centerX + dist * 0.9, targetY + dist * 0.9, centerY + dist * 0.9);
     }
-    camera.lookAt(centerX, 0, centerY);
+    camera.lookAt(centerX, targetY, centerY);
     if (controls) {
       (controls as any).update();
     }
@@ -241,7 +242,7 @@ function LoadIndicator({ load }: { load: PointLoad }) {
 }
 
 export const StructuralViewer: React.FC = () => {
-  const { floorModel, fullBuildingModel, selectedStory, viewMode, selectedElement, setSelectedElement, layerVisibility } = useStore();
+  const { floorModel, fullBuildingModel, stories, selectedStoryIds, selectedStory, viewMode, selectedElement, setSelectedElement, layerVisibility } = useStore();
   const [cameraPreset, setCameraPreset] = useState<'iso' | 'top' | 'front' | 'side' | 'wireframe'>('iso');
 
   // Story elevation lookup map for full building model rendering
@@ -257,8 +258,32 @@ export const StructuralViewer: React.FC = () => {
     return map;
   }, [fullBuildingModel]);
 
-  // Active target story filter name
-  const activeStoryFilter = selectedStory?.name ? selectedStory.name.toLowerCase() : null;
+  // Set of selected story names for 3D viewport filtering (null if all or none selected)
+  const activeStoryFilterSet = React.useMemo(() => {
+    if (!stories || stories.length === 0) return null;
+    if (selectedStoryIds.length === 0 || selectedStoryIds.length === stories.length) {
+      return null; // Display all floors data when none or all selected
+    }
+    const set = new Set<string>();
+    stories.forEach((st) => {
+      if (selectedStoryIds.includes(st.id)) {
+        const clean = st.name.trim().toLowerCase();
+        set.add(clean);
+        set.add(clean.replace(/\s+/g, ''));
+        set.add(clean.replace(/[\s_-]+/g, ''));
+      }
+    });
+    return set;
+  }, [stories, selectedStoryIds]);
+
+  const isElementVisible = React.useCallback((storyName: string | undefined | null): boolean => {
+    if (!activeStoryFilterSet) return true; // Show all floors when none or all selected
+    if (!storyName) return true;
+    const clean = storyName.trim().toLowerCase();
+    const cleanNoSpace = clean.replace(/\s+/g, '');
+    const cleanAlpha = clean.replace(/[\s_-]+/g, '');
+    return activeStoryFilterSet.has(clean) || activeStoryFilterSet.has(cleanNoSpace) || activeStoryFilterSet.has(cleanAlpha);
+  }, [activeStoryFilterSet]);
 
   // Compute model bounding box center and size dynamically
   const bounds = React.useMemo(() => {
@@ -276,12 +301,18 @@ export const StructuralViewer: React.FC = () => {
     };
 
     if (viewMode === 'full' && fullBuildingModel) {
-      (fullBuildingModel.slabs || []).forEach((s: any) => s.polygon.forEach((p: any) => includePoint(p.x, p.y, s.elevation)));
-      (fullBuildingModel.frames || []).forEach((f: any) => {
-        if (f.start_point) includePoint(f.start_point.x, f.start_point.y, f.start_point.z);
-        if (f.end_point) includePoint(f.end_point.x, f.end_point.y, f.end_point.z);
-      });
-      (fullBuildingModel.walls || []).forEach((w: any) => w.polygon.forEach((p: any) => includePoint(p.x, p.y, w.bottom_z)));
+      (fullBuildingModel.slabs || [])
+        .filter((s: any) => isElementVisible(s.story))
+        .forEach((s: any) => s.polygon.forEach((p: any) => includePoint(p.x, p.y, s.elevation)));
+      (fullBuildingModel.frames || [])
+        .filter((f: any) => isElementVisible(f.story))
+        .forEach((f: any) => {
+          if (f.start_point) includePoint(f.start_point.x, f.start_point.y, f.start_point.z);
+          if (f.end_point) includePoint(f.end_point.x, f.end_point.y, f.end_point.z);
+        });
+      (fullBuildingModel.walls || [])
+        .filter((w: any) => isElementVisible(w.story))
+        .forEach((w: any) => w.polygon.forEach((p: any) => includePoint(p.x, p.y, w.bottom_z)));
     } else if (floorModel) {
       floorModel.slabs.forEach((s) => s.polygon.forEach((p) => includePoint(p.x, p.y, 0)));
       floorModel.openings.forEach((o) => o.polygon.forEach((p) => includePoint(p.x, p.y, 0)));
@@ -306,7 +337,7 @@ export const StructuralViewer: React.FC = () => {
     const centerZ = (minZ + maxZ) / 2;
     const size = Math.max(maxX - minX, maxY - minY, maxZ - minZ, 10);
     return { minX, maxX, minY, maxY, minZ, maxZ, centerX, centerY, centerZ, size };
-  }, [viewMode, fullBuildingModel, floorModel, activeStoryFilter]);
+  }, [viewMode, fullBuildingModel, floorModel, activeStoryFilterSet]);
 
   const isWireframeMode = cameraPreset === 'wireframe';
 
@@ -376,8 +407,11 @@ export const StructuralViewer: React.FC = () => {
             {/* Multi-story Slabs */}
             {layerVisibility.slabs &&
               (fullBuildingModel.slabs || [])
+                .filter((slab: any) => isElementVisible(slab.story))
                 .map((slab: any) => {
-                const elev = storyElevations[slab.story ? slab.story.trim().toLowerCase() : ''] ?? slab.elevation ?? 0.0;
+                const elev = (slab.elevation !== undefined && slab.elevation !== null && slab.elevation > 0)
+                  ? slab.elevation
+                  : (storyElevations[slab.story ? slab.story.trim().toLowerCase() : ''] ?? 0.0);
                 return (
                   <group key={slab.id} position={[0, elev, 0]}>
                     <SlabMesh
@@ -403,6 +437,7 @@ export const StructuralViewer: React.FC = () => {
 
             {/* Multi-story Frame Elements (Beams & Columns) */}
             {(fullBuildingModel.frames || [])
+              .filter((fr: any) => isElementVisible(fr.story))
               .map((fr: any) => {
               if (fr.type === 'Column' && layerVisibility.columns) {
                 const p1 = fr.start_point;
@@ -449,6 +484,7 @@ export const StructuralViewer: React.FC = () => {
             {/* Multi-story Core Walls */}
             {layerVisibility.walls &&
               (fullBuildingModel.walls || [])
+                .filter((w: any) => isElementVisible(w.story))
                 .map((w: any) => {
                 if (!w.polygon || w.polygon.length < 2) return null;
                 const p1 = w.polygon[0];

@@ -4,25 +4,42 @@ const API_BASE = import.meta.env.VITE_API_URL || '/api';
 
 export const api = {
   async getStories(projectId: string): Promise<Story[]> {
+    if (!projectId) return [];
     const res = await fetch(`${API_BASE}/projects/${projectId}/stories`);
-    if (!res.ok) throw new Error('Failed to fetch project stories.');
-    return res.json();
+    if (!res.ok) {
+      const errData = await res.json().catch(() => ({}));
+      throw new Error(errData.detail || 'Failed to fetch project stories.');
+    }
+    const data = await res.json();
+    if (Array.isArray(data)) return data;
+    if (data && Array.isArray(data.stories)) return data.stories;
+    return [];
   },
 
   async getBuildingModel(projectId: string) {
+    if (!projectId) return null;
     const res = await fetch(`${API_BASE}/projects/${projectId}/building-model`);
-    if (!res.ok) throw new Error('Failed to fetch complete building model.');
+    if (!res.ok) {
+      const errData = await res.json().catch(() => ({}));
+      throw new Error(errData.detail || 'Failed to fetch complete building model.');
+    }
     return res.json();
   },
 
-  async uploadEtabsModel(projectId: string, file: File): Promise<{ job_id: string }> {
+  async uploadEtabsModel(projectId: string, file: File, companionFile?: File, inTool: boolean = true): Promise<{ job_id: string }> {
     const formData = new FormData();
     formData.append('file', file);
-    const res = await fetch(`${API_BASE}/projects/${projectId}/upload`, {
+    if (companionFile) {
+      formData.append('companion_file', companionFile);
+    }
+    const res = await fetch(`${API_BASE}/projects/${projectId}/upload?in_tool=${inTool}`, {
       method: 'POST',
       body: formData,
     });
-    if (!res.ok) throw new Error('Failed to upload ETABS model file.');
+    if (!res.ok) {
+      const errData = await res.json().catch(() => ({}));
+      throw new Error(errData.detail || 'Failed to upload ETABS model file.');
+    }
     return res.json();
   },
 
@@ -66,7 +83,7 @@ export const api = {
     return res.json();
   },
 
-  async connectEtabsApi(projectId: string = 'sample_proj') {
+  async connectEtabsApi(projectId: string = '') {
     const res = await fetch(`${API_BASE}/etabs/connect?project_id=${projectId}`, { method: 'POST' });
     if (!res.ok) {
       const errData = await res.json().catch(() => ({}));
@@ -138,4 +155,20 @@ export const api = {
     a.remove();
     window.URL.revokeObjectURL(url);
   },
+
+  async resetBackendState() {
+    const res = await fetch(`${API_BASE}/reset`, { method: 'POST' });
+    if (!res.ok) throw new Error('Failed to reset backend state.');
+    return res.json();
+  },
+
+  async previewFloorExport(projectId: string, floorId: string) {
+    const res = await fetch(`${API_BASE}/projects/${projectId}/preview-export/${floorId}`);
+    if (!res.ok) {
+      const errData = await res.json().catch(() => ({}));
+      throw new Error(errData.detail || 'Failed to fetch export preview.');
+    }
+    return res.json();
+  },
 };
+

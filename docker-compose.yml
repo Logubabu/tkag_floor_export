@@ -12,5 +12,5 @@ services:
     environment:
       - PORT=8080
       - ALLOWED_ORIGINS=*
-    volumes:
-      - ./backend/data:/app/data
+    # volumes:
+    #   - ./backend/data:/app/data

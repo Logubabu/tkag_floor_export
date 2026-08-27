@@ -1,13 +1,15 @@
+from typing import Optional
 import os
 import io
-import zipfile
+import re
+from datetime import datetime
 from typing import List, Dict, Any
-from fastapi import APIRouter, UploadFile, File, HTTPException, BackgroundTasks, Response
+from fastapi import APIRouter, UploadFile, File, HTTPException, BackgroundTasks, Response, Query
 from pydantic import BaseModel
 
 from app.workers.job_manager import job_manager
 from app.floor_extractor.extractor import FloorExtractor
-from app.models.intermediate import BuildingModel, FloorModel, ExtractionMode, ValidationResult
+from app.models.intermediate import FloorModel, ExtractionMode
 from app.validation.validator import StructuralValidator
 from app.ram_concept.exporter import RAMConceptExporter
 from app.geometry.comparison import GeometryComparisonEngine
@@ -15,19 +17,19 @@ from app.geometry.comparison import GeometryComparisonEngine
 
 router = APIRouter(prefix="/api")
 
-# In-memory storage for MVP projects & floor models
-projects_db: Dict[str, Dict[str, Any]] = {
-    "sample_proj": {
-        "id": "sample_proj",
-        "name": "Sample Building Project",
-        "created_at": "2026-08-20",
-        "filename": "sample_building.e2k",
-        "job_id": None,
-        "building_model": None
-    }
-}
+# In-memory storage for projects & floor models
+projects_db: Dict[str, Dict[str, Any]] = {}
 
 extracted_floors_db: Dict[str, FloorModel] = {}
+# Text exports are indexed independently of the active browser project.  This
+# lets a matching EDB reuse its export if the UI has changed projects.
+text_exports_by_model_key: Dict[str, str] = {}
+
+
+def _model_key(filename: str) -> str:
+    """Return a case-insensitive ETABS model name without its file suffix."""
+    name = os.path.basename(filename).strip().lower()
+    return re.sub(r"(?:\.e2k|\.s2k|\.edb|\.\$?(?:et|ed)|\$?(?:et|ed)|\.ed)$", "", name)
 
 
 class ProjectCreate(BaseModel):
@@ -59,7 +61,7 @@ def create_project(data: ProjectCreate):
     proj = {
         "id": pid,
         "name": data.name,
-        "created_at": "2026-08-20",
+        "created_at": datetime.now(),
         "filename": None,
         "job_id": None,
         "building_model": None
@@ -88,21 +90,33 @@ def get_project(project_id: str):
 
 
 @router.post("/projects/{project_id}/upload")
-async def upload_model(project_id: str, background_tasks: BackgroundTasks, file: UploadFile = File(...)):
+async def upload_model(
+    project_id: str,
+    background_tasks: BackgroundTasks,
+    file: UploadFile = File(...),
+    companion_file: Optional[UploadFile] = File(None),
+    in_tool: bool = Query(True, description="Process in tool: True (process inside tool, ignore ETABS), False (live ETABS process)")
+):
+    # Clear previous extracted floors for this project
+    extracted_floors_db.clear()
+
     if project_id not in projects_db:
         projects_db[project_id] = {
             "id": project_id,
             "name": f"Project {project_id}",
-            "created_at": "2026-08-20",
+            "created_at": datetime.now(),
             "filename": file.filename,
             "job_id": None,
             "building_model": None
         }
+    else:
+        projects_db[project_id]["building_model"] = None
+        projects_db[project_id]["job_id"] = None
+        projects_db[project_id]["text_export_content"] = None
 
     filename_lower = file.filename.lower()
-    allowed_exts = ('.e2k', '.s2k', '.json', '.edb', '.$ed', '$ed', '.ed')
+    allowed_exts = ('.e2k', '.s2k', '.json', '.edb', '.$ed', '$ed', '.ed', '.$et', '$et', '.et', '.d2k')
     if not any(filename_lower.endswith(ext) for ext in allowed_exts) and not file.filename.startswith('.'):
-        # Default allow if filename has valid extension
         pass
 
     content_bytes = await file.read()
@@ -110,16 +124,40 @@ async def upload_model(project_id: str, background_tasks: BackgroundTasks, file:
     if not filename_lower.endswith('.edb'):
         content_str = content_bytes.decode("utf-8", errors="ignore")
 
+    model_key = _model_key(file.filename)
+    if content_str is not None:
+        projects_db[project_id]["text_export_content"] = content_str
+        text_exports_by_model_key[model_key] = content_str
+
+    companion_text = None
+    if companion_file:
+        comp_bytes = await companion_file.read()
+        companion_text = comp_bytes.decode("utf-8", errors="ignore")
+        if companion_text:
+            text_exports_by_model_key[model_key] = companion_text
+            projects_db[project_id]["text_export_content"] = companion_text
+
+    if not companion_text:
+        companion_text = text_exports_by_model_key.get(model_key)
+
     job = job_manager.create_job(file.filename)
     projects_db[project_id]["job_id"] = job.job_id
     projects_db[project_id]["filename"] = file.filename
 
-    background_tasks.add_task(job_manager.process_e2k_file, job.job_id, content_str, content_bytes)
+    background_tasks.add_task(
+        job_manager.process_e2k_file,
+        job.job_id,
+        content_str,
+        content_bytes,
+        in_tool,
+        companion_text,
+    )
 
     return {
         "message": "File upload accepted. Processing in background.",
         "job_id": job.job_id,
-        "filename": file.filename
+        "filename": file.filename,
+        "in_tool": in_tool
     }
 
 
@@ -146,12 +184,15 @@ def get_project_stories(project_id: str):
     proj = projects_db[project_id]
     b_model = proj.get("building_model")
 
-    # If job completed, pull from job
+    # If job exists, check status
     if proj.get("job_id"):
         job = job_manager.get_job(proj["job_id"])
-        if job and job.building_model:
-            b_model = job.building_model
-            proj["building_model"] = b_model
+        if job:
+            if job.status == "FAILED":
+                raise HTTPException(status_code=422, detail=job.error or "Model parsing job failed.")
+            if job.building_model:
+                b_model = job.building_model
+                proj["building_model"] = b_model
 
     if not b_model:
         return []
@@ -169,20 +210,15 @@ def get_full_building_model(project_id: str):
 
     if proj.get("job_id"):
         job = job_manager.get_job(proj["job_id"])
-        if job and job.building_model:
-            b_model = job.building_model
-            proj["building_model"] = b_model
-
-    if not b_model:
-        sample_path = os.path.join(os.path.dirname(__file__), "..", "..", "sample_models", "sample_building.e2k")
-        if os.path.exists(sample_path):
-            from app.etabs.e2k_parser import E2KParser
-            with open(sample_path, "r") as f:
-                b_model = E2KParser().parse_string(f.read())
+        if job:
+            if job.status == "FAILED":
+                raise HTTPException(status_code=422, detail=job.error or "Model parsing job failed.")
+            if job.building_model:
+                b_model = job.building_model
                 proj["building_model"] = b_model
 
     if not b_model:
-        raise HTTPException(status_code=404, detail="No building model found.")
+        raise HTTPException(status_code=404, detail="No building model found for this project.")
 
     return b_model.model_dump()
 
@@ -196,16 +232,7 @@ def extract_floor(project_id: str, req: FloorExtractRequest):
     b_model = proj.get("building_model")
 
     if not b_model:
-        # Load sample model if none loaded yet
-        sample_path = os.path.join(os.path.dirname(__file__), "..", "..", "sample_models", "sample_building.e2k")
-        if os.path.exists(sample_path):
-            from app.etabs.e2k_parser import E2KParser
-            with open(sample_path, "r") as f:
-                b_model = E2KParser().parse_string(f.read())
-                proj["building_model"] = b_model
-
-    if not b_model:
-        raise HTTPException(status_code=400, detail="No ETABS model loaded for this project yet.")
+        raise HTTPException(status_code=400, detail="No valid ETABS model loaded for this project. Please upload a valid .$ET or .E2K file, or run ETABS API.")
 
     floor_model = FloorExtractor.extract_floor(b_model, req.story_name, req.mode)
     floor_id = f"{project_id}_{req.story_name.lower().replace(' ', '_')}"
@@ -298,7 +325,7 @@ def verify_floor_loads(project_id: str, floor_id: str):
 
 
 @router.post("/etabs/connect")
-def connect_live_etabs(project_id: str = "sample_proj"):
+def connect_live_etabs(project_id: str = "active_proj"):
     from app.etabs.com_adapter import ETABSCOMAdapter
     adapter = ETABSCOMAdapter()
     success, msg = adapter.connect()
@@ -324,7 +351,7 @@ def connect_live_etabs(project_id: str = "sample_proj"):
 def get_etabs_api_status():
     from app.etabs.com_adapter import ETABSCOMAdapter
     adapter = ETABSCOMAdapter()
-    success, msg = adapter.connect()
+    success, msg = adapter.connect_running_instance()
     return {"is_connected": success, "message": msg}
 
 
@@ -396,4 +423,66 @@ def download_ram_package(project_id: str, req: ExportPackageRequest):
             "Content-Disposition": f"attachment; filename={filename}"
         }
     )
+
+
+@router.post("/projects/compare")
+def compare_models(project_id_a: str, project_id_b: str):
+    """
+    Compares normalized BuildingModels of two projects (e.g. $ET vs EDB).
+    """
+    proj_a = projects_db.get(project_id_a)
+    proj_b = projects_db.get(project_id_b)
+
+    if not proj_a or not proj_a.get("building_model"):
+        raise HTTPException(status_code=404, detail=f"Project A '{project_id_a}' or its model was not found.")
+    if not proj_b or not proj_b.get("building_model"):
+        raise HTTPException(status_code=404, detail=f"Project B '{project_id_b}' or its model was not found.")
+
+    from app.etabs.comparator import ModelComparator
+    comparator = ModelComparator()
+    return comparator.compare(proj_a["building_model"], proj_b["building_model"])
+
+
+@router.post("/reset")
+def reset_backend_state():
+    """
+    Clears all stored in-memory project data, extracted floors, and text exports to ensure
+    browser refreshes and new workflows operate on a completely clean slate.
+    """
+    projects_db.clear()
+    extracted_floors_db.clear()
+    text_exports_by_model_key.clear()
+    job_manager.jobs.clear()
+    return {"status": "success", "message": "Backend session state cleared completely."}
+
+
+@router.get("/projects/{project_id}/preview-export/{floor_id}")
+def preview_floor_export(project_id: str, floor_id: str):
+    """
+    Generates preview data (DXF content preview, RAM Concept automation code, and floor geometry elements)
+    before exporting/downloading files.
+    """
+    if floor_id not in extracted_floors_db:
+        raise HTTPException(status_code=404, detail=f"Extracted floor {floor_id} not found in database.")
+
+    floor_model = extracted_floors_db[floor_id]
+    exporter = RAMConceptExporter(floor_model)
+    res = exporter.generate_output_files()
+
+    return {
+        "floor_id": floor_id,
+        "story_name": floor_model.story.name,
+        "elevation": floor_model.story.elevation,
+        "slabs_count": len(floor_model.slabs),
+        "beams_count": len(floor_model.beams),
+        "columns_count": len(floor_model.columns_below) + len(floor_model.columns_above),
+        "walls_count": len(floor_model.walls_below) + len(floor_model.walls_above),
+        "dxf_filename": res["dxf_filename"],
+        "dxf_preview": res["dxf_content"][:2000],  # first 2KB preview
+        "automation_filename": res["automation_filename"],
+        "automation_preview": res["automation_content"],
+        "cpt_filename": res.get("cpt_filename", res["dxf_filename"].replace(".dxf", ".cpt")),
+        "json_filename": res["json_filename"],
+        "floor_model": floor_model.model_dump()
+    }
 

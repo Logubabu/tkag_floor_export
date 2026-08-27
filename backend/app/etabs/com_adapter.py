@@ -16,8 +16,8 @@ class ETABSCOMAdapter:
         self.ETABSObject = None
         self.is_connected = False
 
-    def connect(self) -> Tuple[bool, str]:
-        # 1. Try connecting to active running ETABS instance (win32com)
+    def connect_running_instance(self) -> Tuple[bool, str]:
+        """Connects strictly to an active, currently running ETABS instance without launching a new process."""
         try:
             import win32com.client
             self.ETABSObject = win32com.client.GetActiveObject("CSI.ETABS.API.ETABSObject")
@@ -27,7 +27,6 @@ class ETABSCOMAdapter:
         except Exception:
             pass
 
-        # 2. Try comtypes Helper / GetObject for running instance
         try:
             import comtypes.client
             helper = comtypes.client.CreateObject('ETABSv1.Helper')
@@ -39,22 +38,29 @@ class ETABSCOMAdapter:
         except Exception:
             pass
 
-        # 3. Launch new background ETABS application instance if ETABS is not already running
+        return False, "No active running ETABS instance detected."
+
+    def connect(self) -> Tuple[bool, str]:
+        # 1. Try connecting to active running ETABS instance first
+        running, msg = self.connect_running_instance()
+        if running:
+            return True, msg
+
+        # 2. Launch new background ETABS application instance if ETABS is not already running
         try:
             import comtypes.client
             helper = comtypes.client.CreateObject('ETABSv1.Helper')
             helper = helper.QueryInterface(comtypes.gen.ETABSv1.cHelper)
-            # CreateObject launches a new instance of ETABS automatically
             self.ETABSObject = helper.CreateObjectProgID("CSI.ETABS.API.ETABSObject")
             if self.ETABSObject:
                 self.ETABSObject.ApplicationStart()
                 self.SapModel = self.ETABSObject.SapModel
                 self.is_connected = True
                 return True, "Successfully started new ETABS application instance via COM API."
-        except Exception as e:
+        except Exception:
             pass
 
-        # 4. Try win32com Dispatch fallback
+        # 3. Try win32com Dispatch fallback
         try:
             import win32com.client
             self.ETABSObject = win32com.client.Dispatch("CSI.ETABS.API.ETABSObject")

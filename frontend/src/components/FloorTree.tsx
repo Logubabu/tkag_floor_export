@@ -81,7 +81,14 @@ export const FloorTree: React.FC<FloorTreeProps> = ({ onSelectFloor, onExportFlo
 
       {/* Story List */}
       <div className="flex-1 overflow-y-auto p-3 space-y-1">
-        {stories.map((story) => {
+        {stories.length === 0 ? (
+          <div className="p-4 text-center text-xs text-slate-400 space-y-2 my-auto">
+            <Layers className="w-8 h-8 text-slate-600 mx-auto opacity-50" />
+            <p className="font-semibold text-slate-300">No Floors Loaded</p>
+            <p className="text-[11px] text-slate-400 font-mono">Upload an .EDB, .$ET, or .D2K model file to extract stories.</p>
+          </div>
+        ) : (
+          stories.map((story) => {
           const is3DActive = selectedStory?.id === story.id;
           const isChecked = selectedStoryIds.includes(story.id);
 
@@ -154,7 +161,7 @@ export const FloorTree: React.FC<FloorTreeProps> = ({ onSelectFloor, onExportFlo
               </div>
             </div>
           );
-        })}
+        }))}
       </div>
 
       {/* Sidebar Section 2: Active Floor Layer Toggles */}

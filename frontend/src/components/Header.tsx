@@ -2,7 +2,6 @@ import React from 'react';
 import { Layers, Download, CheckCircle2, Box, Activity, UploadCloud, FileCode } from 'lucide-react';
 import { useStore } from '../store/useStore';
 import { api } from '../services/api';
-import { formatLength } from '../utils/unitConverter';
 
 interface HeaderProps {
   onOpenUploadModal: () => void;
@@ -23,7 +22,7 @@ export const Header: React.FC<HeaderProps> = ({
   onOpenRamViewerModal,
   onOpenExportedFilesModal,
 }) => {
-  const { activeUnits, setActiveUnits, selectedStory, floorModel, validationResult } = useStore();
+  const { activeUnits, setActiveUnits, selectedStory, floorModel, validationResult, inTool, setInTool } = useStore();
 
   return (
     <header className="h-16 bg-slate-900 border-b border-slate-800 flex items-center justify-between px-6 z-20 shrink-0">
@@ -40,26 +39,37 @@ export const Header: React.FC<HeaderProps> = ({
         </div>
       </div>
 
-      {/* Active Story & Extraction Quick Status */}
-      {selectedStory && (
-        <div className="hidden md:flex items-center gap-4 bg-slate-950/60 px-4 py-1.5 rounded-lg border border-slate-800 text-xs">
-          <div className="flex items-center gap-2 text-cyan-400 font-medium">
-            <Layers className="w-4 h-4" />
-            <span>{selectedStory.name}</span>
-          </div>
-          <div className="w-px h-3 bg-slate-800" />
-          <div className="text-slate-400">
-            Elev: <span className="text-slate-200 font-mono">{formatLength(selectedStory.elevation, activeUnits.length)}</span>
-          </div>
-          <div className="w-px h-3 bg-slate-800" />
-          <div className="text-slate-400">
-            Height: <span className="text-slate-200 font-mono">{formatLength(selectedStory.height, activeUnits.length)}</span>
-          </div>
-        </div>
-      )}
 
-      {/* Actions & Unit Selector */}
+
+      {/* Actions & Utilities */}
       <div className="flex items-center gap-3">
+        {/* Process Mode Toggle (In-Tool vs Live ETABS) */}
+        <div className="flex items-center gap-1 bg-slate-950 px-2 py-1 rounded-lg border border-slate-800 text-xs">
+          <span className="text-slate-400 text-[11px] font-mono mr-1">Mode:</span>
+          <button
+            onClick={() => setInTool(true)}
+            className={`px-2 py-0.5 rounded text-[11px] font-semibold transition ${
+              inTool
+                ? 'bg-cyan-950 text-cyan-300 border border-cyan-700/60 shadow-sm'
+                : 'text-slate-400 hover:text-slate-200'
+            }`}
+            title="In-Tool: Process files 100% inside web app without requiring ETABS running"
+          >
+            In-Tool
+          </button>
+          <button
+            onClick={() => setInTool(false)}
+            className={`px-2 py-0.5 rounded text-[11px] font-semibold transition ${
+              !inTool
+                ? 'bg-emerald-950 text-emerald-300 border border-emerald-700/60 shadow-sm'
+                : 'text-slate-400 hover:text-slate-200'
+            }`}
+            title="Live ETABS: Connect directly to running ETABS API session"
+          >
+            Live ETABS
+          </button>
+        </div>
+
         {/* Unit Selector */}
         <div className="flex items-center gap-1.5 bg-slate-950 px-3 py-1.5 rounded-lg border border-slate-800 text-xs">
           <span className="text-slate-400 font-medium mr-0.5">Units:</span>

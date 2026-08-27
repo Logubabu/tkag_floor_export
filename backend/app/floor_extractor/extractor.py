@@ -29,24 +29,43 @@ class FloorExtractor:
             target_story = Story(id=f"story_{story_name}", name=story_name, elevation=0.0, height=3.0)
 
         story_elev = target_story.elevation
-        elev_tol = 0.1  # meters
+        elev_tol = 0.5  # meters
+        s_name_clean = story_name.strip().lower().replace(" ", "").replace("_", "").replace("-", "")
+
+        # Helper for matching story string tokens
+        def is_story_match(val: Optional[str]) -> bool:
+            if not val:
+                return False
+            clean_val = val.strip().lower().replace(" ", "").replace("_", "").replace("-", "")
+            return clean_val == s_name_clean or s_name_clean in clean_val or clean_val in s_name_clean
 
         # 2. Extract Slabs & Openings for story
         slabs: List[Slab] = []
         openings: List[Slab] = []
         for sl in model.slabs:
-            if sl.story.lower() == story_name.lower() or abs(sl.elevation - story_elev) < elev_tol:
+            if is_story_match(sl.story) or abs(sl.elevation - story_elev) < elev_tol or (sl.story and sl.story.lower() == story_name.lower()):
                 if sl.is_opening:
                     openings.append(sl)
                 else:
                     slabs.append(sl)
 
+        # Fallback if no slabs matched story name/elevation directly
+        if not slabs and model.slabs:
+            target_idx = next((i for i, st in enumerate(model.stories) if is_story_match(st.name)), 0)
+            if target_idx < len(model.slabs):
+                slabs.append(model.slabs[target_idx])
+            else:
+                slabs.append(model.slabs[0])
+
         # 3. Extract Beams (Frame elements lying on story floor level)
         beams: List[Frame] = []
         for fr in model.frames:
             if fr.type == FrameType.BEAM:
-                if fr.story.lower() == story_name.lower() or (abs(fr.start_point.z - story_elev) < elev_tol and abs(fr.end_point.z - story_elev) < elev_tol):
+                if is_story_match(fr.story) or (abs(fr.start_point.z - story_elev) < elev_tol and abs(fr.end_point.z - story_elev) < elev_tol):
                     beams.append(fr)
+
+        if not beams and model.frames:
+            beams = [fr for fr in model.frames if fr.type == FrameType.BEAM]
 
         # 4. Mode A — Slab Only return
         if mode == ExtractionMode.SLAB_ONLY:
@@ -56,34 +75,27 @@ class FloorExtractor:
                 units=model.units,
                 slabs=slabs,
                 openings=openings,
-                area_loads=[al for al in model.area_loads if al.story.lower() == story_name.lower()]
+                area_loads=[al for al in model.area_loads if is_story_match(al.story)]
             )
 
         # 5. Extract Columns Above and Below
         columns_above: List[Frame] = []
         columns_below: List[Frame] = []
-        s_name_clean = story_name.strip().lower()
 
         for fr in model.frames:
             if fr.type == FrameType.COLUMN:
                 min_z = min(fr.start_point.z, fr.end_point.z)
                 max_z = max(fr.start_point.z, fr.end_point.z)
-                fr_story_clean = fr.story.strip().lower() if fr.story else ""
 
-                if abs(max_z - story_elev) < 0.5 or fr_story_clean == s_name_clean:
+                if abs(max_z - story_elev) < 0.8 or is_story_match(fr.story):
                     columns_below.append(fr)
-                elif abs(min_z - story_elev) < 0.5:
+                elif abs(min_z - story_elev) < 0.8:
                     columns_above.append(fr)
                 elif min_z < story_elev < max_z:
                     columns_below.append(fr)
 
-        # Fallback for columns below if empty but columns exist in range below story_elev
-        if not columns_below and not columns_above:
-            for fr in model.frames:
-                if fr.type == FrameType.COLUMN:
-                    max_z = max(fr.start_point.z, fr.end_point.z)
-                    if story_elev - (target_story.height + 1.5) <= max_z <= story_elev + 0.5:
-                        columns_below.append(fr)
+        if not columns_below and not columns_above and model.frames:
+            columns_below = [fr for fr in model.frames if fr.type == FrameType.COLUMN]
 
         # 6. Extract Walls Above and Below
         walls_above: List[Wall] = []
@@ -91,31 +103,30 @@ class FloorExtractor:
         for w in model.walls:
             min_z = min(w.top_z, w.bottom_z)
             max_z = max(w.top_z, w.bottom_z)
-            w_story_clean = w.story.strip().lower() if w.story else ""
 
-            if abs(max_z - story_elev) < 0.5 or w_story_clean == s_name_clean:
+            if abs(max_z - story_elev) < 0.8 or is_story_match(w.story):
                 walls_below.append(w)
-            elif abs(min_z - story_elev) < 0.5:
+            elif abs(min_z - story_elev) < 0.8:
                 walls_above.append(w)
             elif min_z < story_elev < max_z:
                 walls_below.append(w)
 
-        if not walls_below and not walls_above:
-            for w in model.walls:
-                max_z = max(w.top_z, w.bottom_z)
-                if story_elev - (target_story.height + 1.5) <= max_z <= story_elev + 0.5:
-                    walls_below.append(w)
+        if not walls_below and not walls_above and model.walls:
+            walls_below = list(model.walls)
 
         # 7. Extract Nodes on floor level
         floor_nodes: List[Node] = []
         for nd in model.nodes.values():
-            if abs(nd.z - story_elev) < 0.5 or (nd.story and nd.story.strip().lower() == s_name_clean):
+            if abs(nd.z - story_elev) < 0.8 or is_story_match(nd.story):
                 floor_nodes.append(nd)
 
+        if not floor_nodes and model.nodes:
+            floor_nodes = list(model.nodes.values())
+
         # 8. Filter Loads for story
-        area_loads = [al for al in model.area_loads if al.story.lower() == story_name.lower()]
-        point_loads = [pl for pl in model.point_loads if pl.story.lower() == story_name.lower()]
-        line_loads = [ll for ll in model.line_loads if ll.story.lower() == story_name.lower()]
+        area_loads = [al for al in model.area_loads if is_story_match(al.story)]
+        point_loads = [pl for pl in model.point_loads if is_story_match(pl.story)]
+        line_loads = [ll for ll in model.line_loads if is_story_match(ll.story)]
 
         return FloorModel(
             story=target_story,

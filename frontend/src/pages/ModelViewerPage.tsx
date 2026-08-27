@@ -39,25 +39,45 @@ export const ModelViewerPage: React.FC<ModelViewerPageProps> = () => {
   const [isExportedFilesOpen, setIsExportedFilesOpen] = useState(false);
 
   const loadFullModelAndStories = async () => {
+    if (!activeProjectId) {
+      setStories([]);
+      setSelectedStory(null);
+      setFloorModel(null);
+      setValidationResult(null);
+      setFullBuildingModel(null);
+      return;
+    }
+
     try {
       const fetchedStories = await api.getStories(activeProjectId);
-      setStories(fetchedStories);
+      if (Array.isArray(fetchedStories) && fetchedStories.length > 0) {
+        setStories(fetchedStories);
 
-      const bModel = await api.getBuildingModel(activeProjectId);
-      setFullBuildingModel(bModel);
-      setViewMode('full');
+        if (!useStore.getState().selectedStory) {
+          setSelectedStory(fetchedStories[0]);
+        }
+      }
 
-      if (fetchedStories.length > 0) {
-        const firstStory = fetchedStories[0];
-        setSelectedStory(firstStory);
-        await runFloorExtraction(firstStory, 'Mode B — Slab + Supporting Elements');
+      try {
+        const bModel = await api.getBuildingModel(activeProjectId);
+        if (bModel) {
+          setFullBuildingModel(bModel);
+          setViewMode('full');
+        }
+      } catch (bmErr) {
+        console.warn('Could not fetch full building model, using story-level extraction:', bmErr);
+      }
+
+      const currentSelected = useStore.getState().selectedStory || (fetchedStories.length > 0 ? fetchedStories[0] : null);
+      if (currentSelected) {
+        await runFloorExtraction(currentSelected, useStore.getState().extractionMode);
       }
     } catch (err) {
-      console.error('Failed to load full building model or stories:', err);
+      console.error('Failed to load project stories:', err);
     }
   };
 
-  // Load project stories & building model on mount
+  // Load project stories & building model on mount only if activeProjectId is set
   useEffect(() => {
     loadFullModelAndStories();
   }, [activeProjectId]);
