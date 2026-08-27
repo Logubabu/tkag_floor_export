@@ -88,40 +88,65 @@ export const FloorTree: React.FC<FloorTreeProps> = ({ onSelectFloor, onExportFlo
             <p className="text-[11px] text-slate-400 font-mono">Upload an .EDB, .$ET, or .D2K model file to extract stories.</p>
           </div>
         ) : (
-          stories.map((story) => {
-          const is3DActive = selectedStory?.id === story.id;
-          const isChecked = selectedStoryIds.includes(story.id);
-
-          return (
+          <>
+            {/* All Floors (Full 3D Building View) Option */}
             <div
-              key={story.id}
-              className={`w-full flex items-center justify-between px-3 py-2 rounded-lg text-xs font-medium transition group border ${
-                is3DActive
-                  ? 'bg-gradient-to-r from-cyan-900 to-blue-900 text-white border-cyan-400 shadow-lg shadow-cyan-950/60 ring-2 ring-cyan-500/40 font-bold'
-                  : 'bg-slate-950/40 text-slate-400 border-slate-850 hover:border-slate-750'
+              onClick={() => {
+                useStore.getState().setViewMode('full');
+                useStore.getState().setSelectedStory(null);
+              }}
+              className={`w-full flex items-center justify-between px-3 py-2 rounded-lg text-xs font-semibold cursor-pointer transition border mb-2 ${
+                viewMode === 'full' && !selectedStory
+                  ? 'bg-gradient-to-r from-cyan-900 to-blue-900 text-white border-cyan-400 shadow-lg shadow-cyan-950/60 ring-2 ring-cyan-500/40'
+                  : 'bg-slate-950/60 text-slate-300 border-slate-800 hover:border-cyan-700/60'
               }`}
             >
-              {/* Checkbox for floor extraction selection */}
-              <button
-                onClick={(e) => {
-                  e.stopPropagation();
-                  toggleStorySelection(story.id);
-                }}
-                className="p-1 text-slate-400 hover:text-cyan-400 transition mr-1"
-                title="Toggle floor for batch extraction"
-              >
-                {isChecked ? (
-                  <CheckSquare className="w-4 h-4 text-cyan-400" />
-                ) : (
-                  <Square className="w-4 h-4 text-slate-600" />
-                )}
-              </button>
+              <div className="flex items-center gap-2">
+                <Box className="w-4 h-4 text-cyan-400" />
+                <span>All Floors (Full 3D View)</span>
+              </div>
+              <span className="text-[10px] bg-slate-800 text-cyan-300 px-2 py-0.5 rounded font-mono">
+                {stories.length} Floors
+              </span>
+            </div>
 
-              {/* Story Name & 3D View Trigger */}
-              <div
-                onClick={() => onSelectFloor(story)}
-                className="flex-1 flex items-center justify-between cursor-pointer"
-              >
+            {stories.map((story) => {
+              const is3DActive = viewMode === 'floor' && selectedStory?.id === story.id;
+              const isChecked = selectedStoryIds.includes(story.id);
+
+              return (
+                <div
+                  key={story.id}
+                  className={`w-full flex items-center justify-between px-3 py-2 rounded-lg text-xs font-medium transition group border ${
+                    is3DActive
+                      ? 'bg-gradient-to-r from-cyan-900 to-blue-900 text-white border-cyan-400 shadow-lg shadow-cyan-950/60 ring-2 ring-cyan-500/40 font-bold'
+                      : 'bg-slate-950/40 text-slate-400 border-slate-850 hover:border-slate-750'
+                  }`}
+                >
+                  {/* Checkbox for floor extraction selection */}
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      toggleStorySelection(story.id);
+                    }}
+                    className="p-1 text-slate-400 hover:text-cyan-400 transition mr-1"
+                    title="Toggle floor for batch extraction"
+                  >
+                    {isChecked ? (
+                      <CheckSquare className="w-4 h-4 text-cyan-400" />
+                    ) : (
+                      <Square className="w-4 h-4 text-slate-600" />
+                    )}
+                  </button>
+
+                  {/* Story Name & Single Floor View Trigger */}
+                  <div
+                    onClick={() => {
+                      useStore.getState().setViewMode('floor');
+                      onSelectFloor(story);
+                    }}
+                    className="flex-1 flex items-center justify-between cursor-pointer"
+                  >
                 <div className="flex items-center gap-2">
                   <span className={`font-semibold ${isChecked ? 'text-slate-200' : 'text-slate-500'}`}>
                     {story.name}
@@ -158,10 +183,12 @@ export const FloorTree: React.FC<FloorTreeProps> = ({ onSelectFloor, onExportFlo
                     }`}
                   />
                 </div>
-              </div>
-            </div>
-          );
-        }))}
+                  </div>
+                </div>
+              );
+            })}
+          </>
+        )}
       </div>
 
       {/* Sidebar Section 2: Active Floor Layer Toggles */}

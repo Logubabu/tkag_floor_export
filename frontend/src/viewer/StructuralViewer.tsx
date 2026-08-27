@@ -313,19 +313,43 @@ export const StructuralViewer: React.FC = () => {
       (fullBuildingModel.walls || [])
         .filter((w: any) => isElementVisible(w.story))
         .forEach((w: any) => w.polygon.forEach((p: any) => includePoint(p.x, p.y, w.bottom_z)));
-    } else if (floorModel) {
-      floorModel.slabs.forEach((s) => s.polygon.forEach((p) => includePoint(p.x, p.y, 0)));
-      floorModel.openings.forEach((o) => o.polygon.forEach((p) => includePoint(p.x, p.y, 0)));
-      floorModel.beams.forEach((b) => {
-        if (b.start_point) includePoint(b.start_point.x, b.start_point.y, 0);
-        if (b.end_point) includePoint(b.end_point.x, b.end_point.y, 0);
-      });
-      floorModel.columns_below.concat(floorModel.columns_above).forEach((c) => {
-        if (c.start_point) includePoint(c.start_point.x, c.start_point.y, 0);
-      });
-      floorModel.walls_below.concat(floorModel.walls_above).forEach((w) => {
-        w.polygon.forEach((p) => includePoint(p.x, p.y, 0));
-      });
+    } else if (viewMode === 'floor') {
+      let foundPoints = false;
+      if (floorModel && floorModel.slabs && floorModel.slabs.length > 0) {
+        floorModel.slabs.forEach((s) => s.polygon.forEach((p) => { includePoint(p.x, p.y, 0); foundPoints = true; }));
+        floorModel.openings.forEach((o) => o.polygon.forEach((p) => { includePoint(p.x, p.y, 0); foundPoints = true; }));
+        floorModel.beams.forEach((b) => {
+          if (b.start_point) { includePoint(b.start_point.x, b.start_point.y, 0); foundPoints = true; }
+          if (b.end_point) { includePoint(b.end_point.x, b.end_point.y, 0); foundPoints = true; }
+        });
+        floorModel.columns_below.concat(floorModel.columns_above).forEach((c) => {
+          if (c.start_point) { includePoint(c.start_point.x, c.start_point.y, 0); foundPoints = true; }
+        });
+        floorModel.walls_below.concat(floorModel.walls_above).forEach((w) => {
+          w.polygon.forEach((p) => { includePoint(p.x, p.y, 0); foundPoints = true; });
+        });
+      }
+
+      if (!foundPoints && fullBuildingModel) {
+        const activeStoryName = selectedStory ? selectedStory.name.trim().toLowerCase() : '';
+        const matchStory = (stName: string | undefined) => {
+          if (!stName || !activeStoryName) return true;
+          return stName.trim().toLowerCase() === activeStoryName;
+        };
+
+        (fullBuildingModel.slabs || [])
+          .filter((s: any) => matchStory(s.story))
+          .forEach((s: any) => s.polygon.forEach((p: any) => includePoint(p.x, p.y, 0)));
+        (fullBuildingModel.frames || [])
+          .filter((f: any) => matchStory(f.story))
+          .forEach((f: any) => {
+            if (f.start_point) includePoint(f.start_point.x, f.start_point.y, 0);
+            if (f.end_point) includePoint(f.end_point.x, f.end_point.y, 0);
+          });
+        (fullBuildingModel.walls || [])
+          .filter((w: any) => matchStory(w.story))
+          .forEach((w: any) => w.polygon.forEach((p: any) => includePoint(p.x, p.y, 0)));
+      }
     }
 
     if (minX === Infinity || isNaN(minX)) {
@@ -337,7 +361,7 @@ export const StructuralViewer: React.FC = () => {
     const centerZ = (minZ + maxZ) / 2;
     const size = Math.max(maxX - minX, maxY - minY, maxZ - minZ, 10);
     return { minX, maxX, minY, maxY, minZ, maxZ, centerX, centerY, centerZ, size };
-  }, [viewMode, fullBuildingModel, floorModel, activeStoryFilterSet]);
+  }, [viewMode, fullBuildingModel, floorModel, selectedStory, activeStoryFilterSet]);
 
   const isWireframeMode = cameraPreset === 'wireframe';
 
@@ -524,157 +548,236 @@ export const StructuralViewer: React.FC = () => {
         )}
 
         {/* 2. Render Single Isolated Floor Model */}
-        {viewMode === 'floor' && floorModel && (
+        {viewMode === 'floor' && (
           <group>
-            {/* Slabs */}
-            {layerVisibility.slabs &&
-              floorModel.slabs.map((slab) => (
-                <SlabMesh
-                  key={slab.id}
-                  slab={slab}
-                  isSelected={selectedElement?.id === slab.id}
-                  isWireframe={isWireframeMode}
-                  onClick={() =>
-                    setSelectedElement({
-                      id: slab.id,
-                      type: 'Slab',
-                      details: {
-                        story: slab.story,
-                        property: slab.property_name,
-                        thickness: `${slab.thickness * 1000} mm`,
-                        vertices: slab.polygon.length,
-                        elevation: `${slab.elevation} m`,
-                      },
-                    })
-                  }
-                />
-              ))}
+            {floorModel && floorModel.slabs && floorModel.slabs.length > 0 ? (
+              <>
+                {/* Slabs */}
+                {layerVisibility.slabs &&
+                  floorModel.slabs.map((slab) => (
+                    <SlabMesh
+                      key={slab.id}
+                      slab={slab}
+                      isSelected={selectedElement?.id === slab.id}
+                      isWireframe={isWireframeMode}
+                      onClick={() =>
+                        setSelectedElement({
+                          id: slab.id,
+                          type: 'Slab',
+                          details: {
+                            story: slab.story,
+                            property: slab.property_name,
+                            thickness: `${slab.thickness * 1000} mm`,
+                            vertices: slab.polygon.length,
+                            elevation: `${slab.elevation} m`,
+                          },
+                        })
+                      }
+                    />
+                  ))}
 
-            {/* Openings */}
-            {layerVisibility.slabs &&
-              floorModel.openings.map((op) => <OpeningMesh key={op.id} opening={op} />)}
+                {/* Openings */}
+                {layerVisibility.slabs &&
+                  floorModel.openings.map((op) => <OpeningMesh key={op.id} opening={op} />)}
 
-            {/* Beams */}
-            {layerVisibility.beams &&
-              floorModel.beams.map((bm) => (
-                <BeamMesh
-                  key={bm.id}
-                  beam={bm}
-                  isSelected={selectedElement?.id === bm.id}
-                  onClick={() =>
-                    setSelectedElement({
-                      id: bm.id,
-                      type: 'Beam',
-                      details: {
-                        section: bm.section,
-                        story: bm.story,
-                        start_node: bm.start_node,
-                        end_node: bm.end_node,
-                      },
-                    })
-                  }
-                />
-              ))}
+                {/* Beams */}
+                {layerVisibility.beams &&
+                  floorModel.beams.map((bm) => (
+                    <BeamMesh
+                      key={bm.id}
+                      beam={bm}
+                      isSelected={selectedElement?.id === bm.id}
+                      onClick={() =>
+                        setSelectedElement({
+                          id: bm.id,
+                          type: 'Beam',
+                          details: {
+                            section: bm.section,
+                            story: bm.story,
+                            start_node: bm.start_node,
+                            end_node: bm.end_node,
+                          },
+                        })
+                      }
+                    />
+                  ))}
 
-            {/* Columns Below */}
-            {layerVisibility.columns &&
-              floorModel.columns_below.map((col) => (
-                <ColumnMesh
-                  key={col.id}
-                  column={col}
-                  isAbove={false}
-                  isSelected={selectedElement?.id === col.id}
-                  isWireframe={isWireframeMode}
-                  onClick={() =>
-                    setSelectedElement({
-                      id: col.id,
-                      type: 'Column',
-                      details: {
-                        section: col.section,
-                        story: col.story,
-                        location: `X: ${col.start_point.x.toFixed(2)}, Y: ${col.start_point.y.toFixed(2)}`,
-                        position: 'Supporting Below',
-                      },
-                    })
-                  }
-                />
-              ))}
+                {/* Columns Below */}
+                {layerVisibility.columns &&
+                  floorModel.columns_below.map((col) => (
+                    <ColumnMesh
+                      key={col.id}
+                      column={col}
+                      isAbove={false}
+                      isSelected={selectedElement?.id === col.id}
+                      isWireframe={isWireframeMode}
+                      onClick={() =>
+                        setSelectedElement({
+                          id: col.id,
+                          type: 'Column',
+                          details: {
+                            section: col.section,
+                            story: col.story,
+                            location: `X: ${col.start_point.x.toFixed(2)}, Y: ${col.start_point.y.toFixed(2)}`,
+                            position: 'Supporting Below',
+                          },
+                        })
+                      }
+                    />
+                  ))}
 
-            {/* Columns Above */}
-            {layerVisibility.columns &&
-              floorModel.columns_above.map((col) => (
-                <ColumnMesh
-                  key={col.id}
-                  column={col}
-                  isAbove={true}
-                  isSelected={selectedElement?.id === col.id}
-                  isWireframe={isWireframeMode}
-                  onClick={() =>
-                    setSelectedElement({
-                      id: col.id,
-                      type: 'Column',
-                      details: {
-                        section: col.section,
-                        story: col.story,
-                        location: `X: ${col.start_point.x.toFixed(2)}, Y: ${col.start_point.y.toFixed(2)}`,
-                        position: 'Reaction Above',
-                      },
-                    })
-                  }
-                />
-              ))}
+                {/* Columns Above */}
+                {layerVisibility.columns &&
+                  floorModel.columns_above.map((col) => (
+                    <ColumnMesh
+                      key={col.id}
+                      column={col}
+                      isAbove={true}
+                      isSelected={selectedElement?.id === col.id}
+                      isWireframe={isWireframeMode}
+                      onClick={() =>
+                        setSelectedElement({
+                          id: col.id,
+                          type: 'Column',
+                          details: {
+                            section: col.section,
+                            story: col.story,
+                            location: `X: ${col.start_point.x.toFixed(2)}, Y: ${col.start_point.y.toFixed(2)}`,
+                            position: 'Reaction Above',
+                          },
+                        })
+                      }
+                    />
+                  ))}
 
-            {/* Walls Below */}
-            {layerVisibility.walls &&
-              floorModel.walls_below.map((w) => (
-                <WallMesh
-                  key={w.id}
-                  wall={w}
-                  isAbove={false}
-                  isSelected={selectedElement?.id === w.id}
-                  isWireframe={isWireframeMode}
-                  onClick={() =>
-                    setSelectedElement({
-                      id: w.id,
-                      type: 'Wall',
-                      details: {
-                        property: w.property_name,
-                        thickness: `${w.thickness * 1000} mm`,
-                        story: w.story,
-                        position: 'Supporting Below',
-                      },
-                    })
-                  }
-                />
-              ))}
+                {/* Walls Below */}
+                {layerVisibility.walls &&
+                  floorModel.walls_below.map((w) => (
+                    <WallMesh
+                      key={w.id}
+                      wall={w}
+                      isAbove={false}
+                      isSelected={selectedElement?.id === w.id}
+                      isWireframe={isWireframeMode}
+                      onClick={() =>
+                        setSelectedElement({
+                          id: w.id,
+                          type: 'Wall',
+                          details: {
+                            property: w.property_name,
+                            thickness: `${w.thickness * 1000} mm`,
+                            story: w.story,
+                            position: 'Supporting Below',
+                          },
+                        })
+                      }
+                    />
+                  ))}
 
-            {/* Walls Above */}
-            {layerVisibility.walls &&
-              floorModel.walls_above.map((w) => (
-                <WallMesh
-                  key={w.id}
-                  wall={w}
-                  isAbove={true}
-                  isSelected={selectedElement?.id === w.id}
-                  isWireframe={isWireframeMode}
-                  onClick={() =>
-                    setSelectedElement({
-                      id: w.id,
-                      type: 'Wall',
-                      details: {
-                        property: w.property_name,
-                        thickness: `${w.thickness * 1000} mm`,
-                        story: w.story,
-                        position: 'Reaction Above',
-                      },
-                    })
-                  }
-                />
-              ))}
+                {/* Walls Above */}
+                {layerVisibility.walls &&
+                  floorModel.walls_above.map((w) => (
+                    <WallMesh
+                      key={w.id}
+                      wall={w}
+                      isAbove={true}
+                      isSelected={selectedElement?.id === w.id}
+                      isWireframe={isWireframeMode}
+                      onClick={() =>
+                        setSelectedElement({
+                          id: w.id,
+                          type: 'Wall',
+                          details: {
+                            property: w.property_name,
+                            thickness: `${w.thickness * 1000} mm`,
+                            story: w.story,
+                            position: 'Reaction Above',
+                          },
+                        })
+                      }
+                    />
+                  ))}
+              </>
+            ) : (
+              /* Fallback to rendering selected story from fullBuildingModel */
+              fullBuildingModel && (
+                <>
+                  {layerVisibility.slabs &&
+                    (fullBuildingModel.slabs || [])
+                      .filter((s: any) => !selectedStory || (s.story && s.story.trim().toLowerCase() === selectedStory.name.trim().toLowerCase()))
+                      .map((slab: any) => (
+                        <group key={slab.id} position={[0, 0, 0]}>
+                          <SlabMesh
+                            slab={slab}
+                            isSelected={selectedElement?.id === slab.id}
+                            isWireframe={isWireframeMode}
+                            onClick={() => setSelectedElement({ id: slab.id, type: 'Slab', details: { story: slab.story, property: slab.property_name, thickness: slab.thickness } })}
+                          />
+                        </group>
+                      ))}
 
+                  {(fullBuildingModel.frames || [])
+                    .filter((fr: any) => !selectedStory || (fr.story && fr.story.trim().toLowerCase() === selectedStory.name.trim().toLowerCase()))
+                    .map((fr: any) => {
+                      if (fr.type === 'Column' && layerVisibility.columns) {
+                        const p1 = fr.start_point;
+                        const p2 = fr.end_point;
+                        if (!p1 || !p2) return null;
+                        const midX = (p1.x + p2.x) / 2;
+                        const midY = (p1.y + p2.y) / 2;
+                        const colColor = selectedElement?.id === fr.id ? '#f59e0b' : resolveColor(fr.color, '#8b5cf6');
+                        return (
+                          <group key={fr.id} position={[midX, 0, midY]} onClick={(e) => { e.stopPropagation(); setSelectedElement({ id: fr.id, type: 'Column', details: { section: fr.section, story: fr.story } }); }}>
+                            <mesh>
+                              <boxGeometry args={[0.4, 3.5, 0.4]} />
+                              <meshStandardMaterial color={colColor} wireframe={isWireframeMode} transparent={isWireframeMode} opacity={isWireframeMode ? 0.35 : 1} />
+                            </mesh>
+                          </group>
+                        );
+                      } else if (fr.type === 'Beam' && layerVisibility.beams) {
+                        const p1 = fr.start_point;
+                        const p2 = fr.end_point;
+                        if (!p1 || !p2) return null;
+                        const start = new THREE.Vector3(p1.x, 0.03, p1.y);
+                        const end = new THREE.Vector3(p2.x, 0.03, p2.y);
+                        const beamColor = selectedElement?.id === fr.id ? '#f59e0b' : resolveColor(fr.color, '#3b82f6');
+                        return (
+                          <group key={fr.id} onClick={(e) => { e.stopPropagation(); setSelectedElement({ id: fr.id, type: 'Beam', details: { section: fr.section, story: fr.story } }); }}>
+                            <Line points={[start, end]} color={beamColor} lineWidth={4} />
+                          </group>
+                        );
+                      }
+                      return null;
+                    })}
+
+                  {layerVisibility.walls &&
+                    (fullBuildingModel.walls || [])
+                      .filter((w: any) => !selectedStory || (w.story && w.story.trim().toLowerCase() === selectedStory.name.trim().toLowerCase()))
+                      .map((w: any) => {
+                        if (!w.polygon || w.polygon.length < 2) return null;
+                        const p1 = w.polygon[0];
+                        const p2 = w.polygon[1];
+                        const midX = (p1.x + p2.x) / 2;
+                        const midY = (p1.y + p2.y) / 2;
+                        const len = Math.hypot(p2.x - p1.x, p2.y - p1.y);
+                        if (len < 0.001) return null;
+                        const angle = Math.atan2(p2.y - p1.y, p2.x - p1.x);
+                        const wallColor = selectedElement?.id === w.id ? '#f59e0b' : resolveColor(w.color, '#059669');
+                        return (
+                          <group key={w.id} position={[midX, 0, midY]} rotation={[0, -angle, 0]} onClick={(e) => { e.stopPropagation(); setSelectedElement({ id: w.id, type: 'Wall', details: { property: w.property_name, story: w.story } }); }}>
+                            <mesh>
+                              <boxGeometry args={[len, 3.5, Math.max(w.thickness || 0.3, 0.05)]} />
+                              <meshStandardMaterial color={wallColor} wireframe={isWireframeMode} transparent opacity={isWireframeMode ? 0.3 : 0.8} />
+                            </mesh>
+                          </group>
+                        );
+                      })}
+                </>
+              )
+            )}
             {/* Nodes */}
             {layerVisibility.nodes &&
-              floorModel.nodes &&
+              floorModel?.nodes &&
               floorModel.nodes.map((node) => (
                 <NodeMarker
                   key={node.id}

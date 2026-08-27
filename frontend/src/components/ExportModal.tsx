@@ -9,7 +9,7 @@ interface ExportModalProps {
 }
 
 export const ExportModal: React.FC<ExportModalProps> = ({ isOpen, onClose }) => {
-  const { activeProjectId, stories, selectedStoryIds } = useStore();
+  const { activeProjectId, stories, selectedStory, selectedStoryIds } = useStore();
   const [isExporting, setIsExporting] = useState(false);
   const [exportDxf, setExportDxf] = useState(true);
   const [exportCpt, setExportCpt] = useState(false);
@@ -18,12 +18,15 @@ export const ExportModal: React.FC<ExportModalProps> = ({ isOpen, onClose }) => 
 
   if (!isOpen) return null;
 
-  // Filter selected stories
+  // Filter selected stories or default to currently viewed floor or all floors
   const selectedStories = stories.filter((s) => selectedStoryIds.includes(s.id));
+  const floorsToExport = selectedStories.length > 0
+    ? selectedStories
+    : (selectedStory ? [selectedStory] : stories);
 
   const handleDownloadPackage = async () => {
-    if (selectedStories.length === 0) {
-      alert('Please select at least one floor level for extraction & export.');
+    if (floorsToExport.length === 0) {
+      alert('Please select at least one floor for extraction & export.');
       return;
     }
 
@@ -35,7 +38,7 @@ export const ExportModal: React.FC<ExportModalProps> = ({ isOpen, onClose }) => 
     setIsExporting(true);
     try {
       // 1. Ensure selected floors are extracted first
-      const storyNames = selectedStories.map((s) => s.name);
+      const storyNames = floorsToExport.map((s) => s.name);
       const batchRes = await api.extractBatchFloors(
         activeProjectId,
         storyNames,

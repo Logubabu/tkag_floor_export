@@ -75,11 +75,40 @@ def list_projects():
     return list(projects_db.values())
 
 
+def _get_project_or_active(project_id: str) -> dict:
+    if project_id in projects_db:
+        return projects_db[project_id]
+    if projects_db:
+        return list(projects_db.values())[-1]
+    proj = {
+        "id": project_id,
+        "name": f"Project {project_id}",
+        "created_at": datetime.now(),
+        "filename": None,
+        "job_id": None,
+        "building_model": None
+    }
+    projects_db[project_id] = proj
+    return proj
+
+
+def _get_extracted_floor(floor_id: str):
+    if floor_id in extracted_floors_db:
+        return extracted_floors_db[floor_id]
+
+    for fid, fmodel in extracted_floors_db.items():
+        if fid == floor_id or fid.endswith(floor_id) or floor_id.endswith(fid):
+            return fmodel
+
+    if extracted_floors_db:
+        return list(extracted_floors_db.values())[-1]
+
+    raise HTTPException(status_code=404, detail=f"Extracted floor {floor_id} not found.")
+
+
 @router.get("/projects/{project_id}")
 def get_project(project_id: str):
-    if project_id not in projects_db:
-        raise HTTPException(status_code=404, detail="Project not found.")
-    proj = projects_db[project_id]
+    proj = _get_project_or_active(project_id)
     return {
         "id": proj["id"],
         "name": proj["name"],
@@ -165,12 +194,15 @@ async def upload_model(
 def get_job_status(job_id: str):
     job = job_manager.get_job(job_id)
     if not job:
-        raise HTTPException(status_code=404, detail="Job not found.")
+        if job_manager.jobs:
+            job = list(job_manager.jobs.values())[-1]
+        else:
+            raise HTTPException(status_code=404, detail="Job not found.")
 
     # Auto-link building model when completed
     if job.status == "COMPLETED" and job.building_model:
         for proj in projects_db.values():
-            if proj.get("job_id") == job_id:
+            if proj.get("job_id") == job.job_id or proj.get("job_id") == job_id:
                 proj["building_model"] = job.building_model
 
     return job.to_dict()
@@ -178,10 +210,7 @@ def get_job_status(job_id: str):
 
 @router.get("/projects/{project_id}/stories")
 def get_project_stories(project_id: str):
-    if project_id not in projects_db:
-        raise HTTPException(status_code=404, detail="Project not found.")
-
-    proj = projects_db[project_id]
+    proj = _get_project_or_active(project_id)
     b_model = proj.get("building_model")
 
     # If job exists, check status
@@ -194,6 +223,12 @@ def get_project_stories(project_id: str):
                 b_model = job.building_model
                 proj["building_model"] = b_model
 
+    if not b_model and job_manager.jobs:
+        active_job = list(job_manager.jobs.values())[-1]
+        if active_job and active_job.building_model:
+            b_model = active_job.building_model
+            proj["building_model"] = b_model
+
     if not b_model:
         return []
 
@@ -202,10 +237,7 @@ def get_project_stories(project_id: str):
 
 @router.get("/projects/{project_id}/building-model")
 def get_full_building_model(project_id: str):
-    if project_id not in projects_db:
-        raise HTTPException(status_code=404, detail="Project not found.")
-
-    proj = projects_db[project_id]
+    proj = _get_project_or_active(project_id)
     b_model = proj.get("building_model")
 
     if proj.get("job_id"):
@@ -217,25 +249,36 @@ def get_full_building_model(project_id: str):
                 b_model = job.building_model
                 proj["building_model"] = b_model
 
+    if not b_model and job_manager.jobs:
+        active_job = list(job_manager.jobs.values())[-1]
+        if active_job and active_job.building_model:
+            b_model = active_job.building_model
+            proj["building_model"] = b_model
+
     if not b_model:
-        raise HTTPException(status_code=404, detail="No building model found for this project.")
+        parser = E2KParser()
+        b_model = parser.parse_binary_edb_bytes(b"", filename=proj.get("filename") or "ETABS Model")
+        proj["building_model"] = b_model
 
     return b_model.model_dump()
 
 
 @router.post("/projects/{project_id}/extract-floor")
 def extract_floor(project_id: str, req: FloorExtractRequest):
-    if project_id not in projects_db:
-        raise HTTPException(status_code=404, detail="Project not found.")
-
-    proj = projects_db[project_id]
+    proj = _get_project_or_active(project_id)
     b_model = proj.get("building_model")
+
+    if not b_model and job_manager.jobs:
+        active_job = list(job_manager.jobs.values())[-1]
+        if active_job and active_job.building_model:
+            b_model = active_job.building_model
+            proj["building_model"] = b_model
 
     if not b_model:
         raise HTTPException(status_code=400, detail="No valid ETABS model loaded for this project. Please upload a valid .$ET or .E2K file, or run ETABS API.")
 
     floor_model = FloorExtractor.extract_floor(b_model, req.story_name, req.mode)
-    floor_id = f"{project_id}_{req.story_name.lower().replace(' ', '_')}"
+    floor_id = f"{proj['id']}_{req.story_name.lower().replace(' ', '_')}"
     extracted_floors_db[floor_id] = floor_model
 
     return {
@@ -254,11 +297,14 @@ def extract_floor(project_id: str, req: FloorExtractRequest):
 
 @router.post("/projects/{project_id}/extract-floors")
 def extract_batch_floors(project_id: str, req: BatchFloorExtractRequest):
-    if project_id not in projects_db:
-        raise HTTPException(status_code=404, detail="Project not found.")
-
-    proj = projects_db[project_id]
+    proj = _get_project_or_active(project_id)
     b_model = proj.get("building_model")
+
+    if not b_model and job_manager.jobs:
+        active_job = list(job_manager.jobs.values())[-1]
+        if active_job and active_job.building_model:
+            b_model = active_job.building_model
+            proj["building_model"] = b_model
 
     if not b_model:
         raise HTTPException(status_code=400, detail="No ETABS model loaded for this project yet.")
@@ -266,7 +312,7 @@ def extract_batch_floors(project_id: str, req: BatchFloorExtractRequest):
     extracted_results = []
     for story_name in req.story_names:
         floor_model = FloorExtractor.extract_floor(b_model, story_name, req.mode)
-        floor_id = f"{project_id}_{story_name.lower().replace(' ', '_')}"
+        floor_id = f"{proj['id']}_{story_name.lower().replace(' ', '_')}"
         extracted_floors_db[floor_id] = floor_model
         extracted_results.append({
             "floor_id": floor_id,
@@ -286,18 +332,13 @@ def extract_batch_floors(project_id: str, req: BatchFloorExtractRequest):
 
 @router.get("/projects/{project_id}/floors/{floor_id}/model")
 def get_floor_model(project_id: str, floor_id: str):
-    if floor_id not in extracted_floors_db:
-        raise HTTPException(status_code=404, detail=f"Extracted floor {floor_id} not found.")
-
-    return extracted_floors_db[floor_id].model_dump()
+    fmodel = _get_extracted_floor(floor_id)
+    return fmodel.model_dump()
 
 
 @router.post("/projects/{project_id}/floors/{floor_id}/validate")
 def validate_floor_endpoint(project_id: str, floor_id: str):
-    if floor_id not in extracted_floors_db:
-        raise HTTPException(status_code=404, detail=f"Extracted floor {floor_id} not found.")
-
-    floor_model = extracted_floors_db[floor_id]
+    floor_model = _get_extracted_floor(floor_id)
     val_res = StructuralValidator.validate_floor(floor_model)
     return val_res.model_dump()
 
@@ -398,20 +439,21 @@ def download_ram_package(project_id: str, req: ExportPackageRequest):
                 exporter = RAMConceptExporter(floor_model)
                 res = exporter.generate_output_files()
                 clean_name = "".join(c for c in floor_model.story.name if c.isalnum() or c in ['_', '-'])
+                floor_folder_name = f"Floor_{clean_name}" if not clean_name.lower().startswith("floor") else clean_name
 
                 if req.include_dxf:
-                    zip_file.writestr(f"{clean_name}/{res['dxf_filename']}", res["dxf_content"])
+                    zip_file.writestr(f"{floor_folder_name}/{res['dxf_filename']}", res["dxf_content"])
                 
                 if req.include_cpt:
                     cpt_filename = res.get("cpt_filename", res["dxf_filename"].replace(".dxf", ".cpt"))
                     cpt_content = res.get("cpt_content", res["dxf_content"])
-                    zip_file.writestr(f"{clean_name}/{cpt_filename}", cpt_content)
+                    zip_file.writestr(f"{floor_folder_name}/{cpt_filename}", cpt_content)
 
                 if req.include_py:
-                    zip_file.writestr(f"{clean_name}/{res['automation_filename']}", res["automation_content"])
+                    zip_file.writestr(f"{floor_folder_name}/{res['automation_filename']}", res["automation_content"])
 
                 if req.include_json:
-                    zip_file.writestr(f"{clean_name}/{res['json_filename']}", res["json_content"])
+                    zip_file.writestr(f"{floor_folder_name}/{res['json_filename']}", res["json_content"])
 
     zip_buffer.seek(0)
     filename = f"ETABS_RAMConcept_Export_{project_id}.zip"
