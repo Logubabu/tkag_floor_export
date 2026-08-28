@@ -59,8 +59,8 @@ etabs-ram-converter/
 │   └── supported-features.md
 │
 ├── sample_models/        # Sample ETABS .e2k test files
-├── docker/               # Backend & Frontend Dockerfiles
 ├── docker-compose.yml
+├── Dockerfile
 └── README.md
 ```
 
