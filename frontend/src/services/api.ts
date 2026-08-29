@@ -3,6 +3,14 @@ import { ExtractionMode, FloorModel, Story, ValidationResult } from '../types';
 const API_BASE = import.meta.env.VITE_API_URL || '/api';
 
 export const api = {
+  async resetAllData() {
+    try {
+      await fetch(`${API_BASE}/reset`, { method: 'POST' });
+    } catch (e) {
+      console.warn('Backend reset warning:', e);
+    }
+  },
+
   async getStories(projectId: string): Promise<Story[]> {
     if (!projectId) return [];
     const res = await fetch(`${API_BASE}/projects/${projectId}/stories`);

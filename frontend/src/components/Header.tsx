@@ -1,5 +1,5 @@
 import React from 'react';
-import { Layers, Download, CheckCircle2, Box, Activity, UploadCloud, FileCode } from 'lucide-react';
+import { Layers, Download, CheckCircle2, Box, Activity, UploadCloud, FileCode, RotateCcw } from 'lucide-react';
 import { useStore } from '../store/useStore';
 import { api } from '../services/api';
 
@@ -22,7 +22,71 @@ export const Header: React.FC<HeaderProps> = ({
   onOpenRamViewerModal,
   onOpenExportedFilesModal,
 }) => {
-  const { activeUnits, setActiveUnits, selectedStory, floorModel, validationResult, inTool, setInTool } = useStore();
+  const {
+    activeUnits,
+    setActiveUnits,
+    selectedStory,
+    floorModel,
+    validationResult,
+    inTool,
+    setInTool,
+    resetProjectState,
+    setProjectId,
+    setStories,
+    setSelectedStory,
+    setFullBuildingModel,
+    setViewMode,
+  } = useStore();
+
+  const handleResetData = async () => {
+    if (confirm('Are you sure you want to reset and clear all uploaded model data?')) {
+      try {
+        await api.resetAllData();
+      } catch {}
+      resetProjectState();
+      try {
+        sessionStorage.clear();
+      } catch {}
+      window.location.reload();
+    }
+  };
+
+  const handleConnectApi = async () => {
+    try {
+      setInTool(false);
+      const res = await api.connectEtabsApi();
+      if (res.success) {
+        if (res.project_id) {
+          setProjectId(res.project_id);
+        }
+        if (Array.isArray(res.stories) && res.stories.length > 0) {
+          setStories(res.stories);
+          setSelectedStory(res.stories[0]);
+        }
+        if (res.building_model) {
+          setFullBuildingModel(res.building_model);
+          setViewMode('full');
+        }
+        alert(`ETABS COM API Connected Successfully! Loaded ${res.stories_count || (res.stories ? res.stories.length : 0)} stories.`);
+      } else {
+        alert(
+          "Live ETABS COM API Connection Notice:\n\n" +
+          (res.message ? `${res.message}\n\n` : "") +
+          "Why this happens:\n" +
+          "• Inside Docker: Linux containers cannot access Windows COM drivers or desktop apps.\n" +
+          "• Native Windows: ETABS must be installed and open on your machine.\n\n" +
+          "Solution:\n" +
+          "Run 'start_windows_native.bat' on your Windows machine to connect directly to live ETABS 22!"
+        );
+      }
+    } catch (err: any) {
+      alert(
+        "Live ETABS COM API Connection Notice:\n\n" +
+        (err.message ? `${err.message}\n\n` : "") +
+        "Run 'start_windows_native.bat' on your Windows machine for live ETABS integration!"
+      );
+    }
+  };
 
   return (
     <header className="flex flex-col bg-slate-900 border-b border-slate-800 z-20 shrink-0 select-none">
@@ -107,26 +171,13 @@ export const Header: React.FC<HeaderProps> = ({
 
         {/* Right Side: Action Controls & Modals Trigger Buttons */}
         <div className="flex items-center gap-2 shrink-0">
-          {/* Live ETABS API Connection Button (Enabled only when Live ETABS mode is selected) */}
+          {/* Live ETABS API Connection Button */}
           <button
-            disabled={inTool}
-            onClick={async () => {
-              try {
-                const res = await api.connectEtabsApi();
-                alert(`ETABS COM API Connected Successfully! Loaded ${res.stories_count} stories.`);
-                window.location.reload();
-              } catch (err: any) {
-                alert(err.message || 'Failed to connect to live ETABS COM session.');
-              }
-            }}
-            className={`flex items-center gap-1.5 px-3 py-1 text-[11px] font-semibold rounded-lg transition border shadow-sm ${
-              !inTool
-                ? 'bg-emerald-950/80 hover:bg-emerald-900 text-emerald-300 border-emerald-800 cursor-pointer'
-                : 'bg-slate-800/40 text-slate-500 border-slate-800/50 cursor-not-allowed opacity-50'
-            }`}
-            title={inTool ? "Switch to Live ETABS mode to enable ETABS COM API connection" : "Connect directly to active ETABS application via OAPI"}
+            onClick={handleConnectApi}
+            className="flex items-center gap-1.5 px-3 py-1 bg-emerald-950/80 hover:bg-emerald-900 text-emerald-300 border border-emerald-800 cursor-pointer text-[11px] font-semibold rounded-lg transition shadow-sm"
+            title="Connect directly to active ETABS application via OAPI"
           >
-            <Activity className={`w-3.5 h-3.5 ${!inTool ? 'text-emerald-400' : 'text-slate-500'}`} />
+            <Activity className="w-3.5 h-3.5 text-emerald-400" />
             <span>Connect API</span>
           </button>
 
@@ -137,6 +188,16 @@ export const Header: React.FC<HeaderProps> = ({
           >
             <UploadCloud className="w-3.5 h-3.5 text-cyan-400" />
             <span>Upload File</span>
+          </button>
+
+          {/* Reset / New Project Button */}
+          <button
+            onClick={handleResetData}
+            className="flex items-center gap-1.5 px-2.5 py-1 bg-rose-950/60 hover:bg-rose-900/80 text-rose-300 text-[11px] font-semibold rounded-lg transition border border-rose-900/80 shadow-sm"
+            title="Reset and clear all uploaded data & models to start fresh"
+          >
+            <RotateCcw className="w-3.5 h-3.5 text-rose-400" />
+            <span>Reset Data</span>
           </button>
 
           {/* Floor Extraction Button */}

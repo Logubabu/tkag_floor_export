@@ -66,37 +66,39 @@ etabs-ram-converter/
 
 ---
 
-## 🚀 Quick Start (Local Development)
+## 🚀 Quick Start (Local Development & RAM Concept API)
 
-### 1. Backend Service (FastAPI)
-```bash
-cd backend
-python -m venv venv
-# On Windows:
-venv\Scripts\activate
-# On Linux/macOS:
-source venv/bin/activate
-
-pip install -r requirements.txt
-pytest -v
-python app/main.py
+### 1. Windows Native Execution (Full RAM Concept 2024 API Integration)
+To use direct Bentley RAM Concept 2024 binary `.CPT` model generation and live COM integration on Windows:
+```cmd
+# Run the 1-click launcher on Windows:
+start_windows_native.bat
 ```
-Backend API will run at `http://localhost:8000`.
+- **Web App UI**: `http://localhost:5173`
+- **Backend API**: `http://localhost:8080`
 
-### 2. Frontend Application (Vite + React)
+### 2. Manual Setup
 ```bash
+# Backend:
+cd backend
+pip install -r requirements.txt
+python -m uvicorn app.main:app --host 0.0.0.0 --port 8080 --reload
+
+# Frontend:
 cd frontend
 npm install
 npm run dev
 ```
-Frontend web app will run at `http://localhost:3000`.
 
 ---
 
 ## 🐳 Docker Deployment
 
 ```bash
-docker-compose up --build
+docker compose up -d --build
 ```
-- Frontend: `http://localhost:3000`
-- Backend API: `http://localhost:8000`
+- Web Application: `http://localhost:8080`
+
+> **Note on Docker vs. Windows Native RAM Concept API**:
+> - **Linux Docker Container**: Linux containers cannot execute Windows `.exe` applications (`Concept.exe`). When exported inside Docker, the web app packages the DXF drawing (`.dxf`) and the automated Python macro script (`*_RAMConcept_Automation.py`). Running `python *_RAMConcept_Automation.py` on your Windows workstation automatically invokes RAM Concept 2024 API to produce the native `.CPT` file.
+> - **Windows Native Mode (`start_windows_native.bat`)**: The backend runs directly on your Windows host, automatically detecting `RAM Concept 2024` (`Concept.exe`), and outputs 100% genuine binary `.CPT` files directly from the web app!

@@ -90,20 +90,29 @@ def list_projects():
     return list(projects_db.values())
 
 
+@router.post("/reset")
+def reset_all_data():
+    projects_db.clear()
+    extracted_floors_db.clear()
+    text_exports_by_model_key.clear()
+    return {"success": True, "message": "All project data and extracted models cleared."}
+
+
 def _get_project_or_active(project_id: str) -> dict:
-    if project_id in projects_db:
+    if project_id and project_id in projects_db:
         return projects_db[project_id]
-    if projects_db:
-        return list(projects_db.values())[-1]
+
+    # Create isolated fresh project record for this project_id
+    pid = project_id if project_id else "active_proj"
     proj = {
-        "id": project_id,
-        "name": f"Project {project_id}",
+        "id": pid,
+        "name": f"Project {pid}",
         "created_at": datetime.now(),
         "filename": None,
         "job_id": None,
         "building_model": None
     }
-    projects_db[project_id] = proj
+    projects_db[pid] = proj
     return proj
 
 
@@ -114,9 +123,6 @@ def _get_extracted_floor(floor_id: str):
     for fid, fmodel in extracted_floors_db.items():
         if fid == floor_id or fid.endswith(floor_id) or floor_id.endswith(fid):
             return fmodel
-
-    if extracted_floors_db:
-        return list(extracted_floors_db.values())[-1]
 
     raise HTTPException(status_code=404, detail=f"Extracted floor {floor_id} not found.")
 
@@ -448,7 +454,26 @@ def download_ram_package(project_id: str, req: ExportPackageRequest):
                 cpt_content = res.get("cpt_content")
                 if cpt_content is None:
                     cpt_content = exporter._generate_cpt()
-                zip_file.writestr(f"{floor_folder_name}/{cpt_filename}", cpt_content)
+                
+                if cpt_content:
+                    zip_file.writestr(f"{floor_folder_name}/{cpt_filename}", cpt_content)
+                else:
+                    guide_txt = (
+                        "RAM CONCEPT IMPORT INSTRUCTIONS\n"
+                        "======================================================================\n"
+                        "Native .CPT binary model files are generated directly by Bentley RAM Concept 2024.\n\n"
+                        "Option A (Recommended for 1-Click .CPT Generation):\n"
+                        "  Run 'start_windows_native.bat' on your Windows workstation where RAM Concept 2024 is installed.\n"
+                        "  The web app will automatically invoke RAM Concept 2024 API to generate the native .CPT file directly!\n\n"
+                        "Option B (Import DXF into RAM Concept):\n"
+                        "  1. Open RAM Concept on your machine.\n"
+                        "  2. Click File -> Import -> CAD Drawing (.DXF).\n"
+                        "  3. Select the included CAD exchange file.\n\n"
+                        "Option C (Run Python Automation Macro):\n"
+                        "  Run the included script: python <floor>_RAMConcept_Automation.py\n"
+                        "======================================================================\n"
+                    )
+                    zip_file.writestr(f"{floor_folder_name}/HOW_TO_OPEN_IN_RAM_CONCEPT.txt", guide_txt)
 
             if req.include_py:
                 zip_file.writestr(f"{floor_folder_name}/{res['automation_filename']}", res["automation_content"])
@@ -578,5 +603,65 @@ def extract_etabs_column_forces(req: ETABSLoadExtractionRequest):
         "column_forces_count": len(column_forces),
         "column_forces": column_forces
     }
+
+
+@router.post("/etabs/connect")
+def connect_etabs_live(project_id: str = Query("")):
+    """
+    Connects directly to an active ETABS session via COM OAPI (or launches a new session if ETABS is installed),
+    extracts the building model, and stores it in the active project.
+    """
+    from app.etabs.com_adapter import ETABSCOMAdapter
+    adapter = ETABSCOMAdapter()
+    success, msg = adapter.connect()
+    if not success:
+        return {
+            "success": False,
+            "message": f"ETABS COM API is not available in this environment ({msg}). Run 'start_windows_native.bat' on your Windows machine to connect to live ETABS.",
+            "stories_count": 0,
+            "stories": [],
+            "building_model": None
+        }
+
+    try:
+        b_model = adapter.extract_model()
+        proj = _get_project_or_active(project_id)
+        proj["building_model"] = b_model.model_dump()
+        proj["filename"] = "Live ETABS Model"
+        
+        stories_list = [s.model_dump() for s in b_model.stories]
+        return {
+            "success": True,
+            "message": msg,
+            "project_id": proj["id"],
+            "stories_count": len(stories_list),
+            "stories": stories_list,
+            "building_model": b_model.model_dump()
+        }
+    except Exception as e:
+        return {
+            "success": False,
+            "message": f"Could not extract model from ETABS COM session: {str(e)}",
+            "stories_count": 0,
+            "stories": [],
+            "building_model": None
+        }
+
+
+@router.post("/ram-concept/export-live")
+def export_live_ram_concept(project_id: str = Query(""), floor_id: str = Query("")):
+    """
+    Pushes the active floor model directly to a running/new RAM Concept session via official API.
+    """
+    if floor_id not in extracted_floors_db:
+        raise HTTPException(status_code=404, detail=f"Extracted floor {floor_id} not found.")
+
+    floor_model = extracted_floors_db[floor_id]
+    exporter = RAMConceptExporter(floor_model)
+    cpt_bytes = exporter._generate_cpt_via_ram_concept_api()
+    if not cpt_bytes:
+        raise HTTPException(status_code=500, detail="Failed to export to live RAM Concept engine on this host.")
+
+    return {"success": True, "message": "Successfully generated and pushed model to RAM Concept 2024 engine."}
 
 

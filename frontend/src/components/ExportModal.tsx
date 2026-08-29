@@ -14,7 +14,7 @@ export const ExportModal: React.FC<ExportModalProps> = ({ isOpen, onClose }) => 
   const [exportDxf, setExportDxf] = useState(true);
   const [exportCpt, setExportCpt] = useState(false);
   const [exportJson, setExportJson] = useState(false);
-  const [exportPy, setExportPy] = useState(false);
+  const [exportPy, setExportPy] = useState(true);
 
   if (!isOpen) return null;
 
@@ -85,6 +85,11 @@ export const ExportModal: React.FC<ExportModalProps> = ({ isOpen, onClose }) => 
 
         {/* Body */}
         <div className="p-6 space-y-4 text-xs">
+          {/* Usage Tip Alert */}
+          <div className="p-3 bg-cyan-950/40 border border-cyan-800/50 rounded-xl text-cyan-200 text-[11px] leading-relaxed">
+            <span className="font-semibold text-cyan-300">💡 RAM Concept Import Note:</span> To open in RAM Concept, use <strong>File → Import → CAD Drawing (.DXF)</strong> or run the included <strong>Python Automation Script (.PY)</strong>.
+          </div>
+
           {/* Selected Floors Summary List */}
           <div className="bg-slate-950 p-4 rounded-xl border border-slate-800 space-y-2">
             <div className="flex items-center justify-between">
@@ -122,9 +127,30 @@ export const ExportModal: React.FC<ExportModalProps> = ({ isOpen, onClose }) => 
                 />
                 <FileText className="w-5 h-5 text-cyan-400 shrink-0" />
                 <div>
-                  <p className="font-semibold text-slate-200">AutoCAD Drawing Exchange (.DXF)</p>
+                  <p className="font-semibold text-slate-200">AutoCAD Drawing Exchange (.DXF) <span className="text-[10px] text-cyan-400 font-mono font-bold bg-cyan-950 px-1.5 py-0.5 rounded border border-cyan-800 ml-1">Recommended</span></p>
                   <p className="text-[11px] text-slate-400">
                     RAM Concept standard layer mapped: SLAB_OUTLINE, OPENINGS, COLUMNS, BEAMS
+                  </p>
+                </div>
+              </div>
+            </label>
+
+            {/* Python Automation Script Option */}
+            <label className={`p-3 rounded-lg border flex items-center justify-between cursor-pointer transition ${
+              exportPy ? 'bg-cyan-950/40 border-cyan-700/60' : 'bg-slate-950/40 border-slate-800 hover:border-slate-700'
+            }`}>
+              <div className="flex items-center gap-3">
+                <input
+                  type="checkbox"
+                  checked={exportPy}
+                  onChange={(e) => setExportPy(e.target.checked)}
+                  className="w-4 h-4 rounded accent-cyan-500"
+                />
+                <Terminal className="w-5 h-5 text-purple-400 shrink-0" />
+                <div>
+                  <p className="font-semibold text-slate-200">RAM Concept Python Automation Macro (.PY)</p>
+                  <p className="text-[11px] text-slate-400">
+                    Automated script using RAM Concept COM API to build and save native .CPT file
                   </p>
                 </div>
               </div>
@@ -145,28 +171,7 @@ export const ExportModal: React.FC<ExportModalProps> = ({ isOpen, onClose }) => 
                 <div>
                   <p className="font-semibold text-slate-200">RAM Concept Native File (.CPT)</p>
                   <p className="text-[11px] text-slate-400">
-                    Direct RAM Concept model file format
-                  </p>
-                </div>
-              </div>
-            </label>
-
-            {/* Python Automation Script Option */}
-            <label className={`p-3 rounded-lg border flex items-center justify-between cursor-pointer transition ${
-              exportPy ? 'bg-cyan-950/40 border-cyan-700/60' : 'bg-slate-950/40 border-slate-800 hover:border-slate-700'
-            }`}>
-              <div className="flex items-center gap-3">
-                <input
-                  type="checkbox"
-                  checked={exportPy}
-                  onChange={(e) => setExportPy(e.target.checked)}
-                  className="w-4 h-4 rounded accent-cyan-500"
-                />
-                <Terminal className="w-5 h-5 text-purple-400 shrink-0" />
-                <div>
-                  <p className="font-semibold text-slate-200">RAM Concept Python COM Automation Script (.PY)</p>
-                  <p className="text-[11px] text-slate-400">
-                    Automated Python macro script using RAM Concept COM API
+                    SQLite 3 binary database container with structured model tables
                   </p>
                 </div>
               </div>

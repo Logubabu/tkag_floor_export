@@ -98,9 +98,8 @@ def test_download_ram_package_with_cpt():
         names = z.namelist()
         cpt_files = [n for n in names if n.endswith(".cpt")]
         assert len(cpt_files) == 1
-        cpt_data = z.read(cpt_files[0]).decode("utf-8")
-        assert "BEGIN_MODEL" in cpt_data
-        assert "RAM_CONCEPT_V8" in cpt_data
+        cpt_bytes = z.read(cpt_files[0])
+        assert cpt_bytes.startswith(b"SQLite format 3")
 
 
 

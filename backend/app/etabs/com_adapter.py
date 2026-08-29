@@ -18,23 +18,37 @@ class ETABSCOMAdapter:
 
     def connect_running_instance(self) -> Tuple[bool, str]:
         """Connects strictly to an active, currently running ETABS instance without launching a new process."""
-        try:
-            import win32com.client
-            self.ETABSObject = win32com.client.GetActiveObject("CSI.ETABS.API.ETABSObject")
-            self.SapModel = self.ETABSObject.SapModel
-            self.is_connected = True
-            return True, "Connected to active ETABS instance via win32com."
-        except Exception:
-            pass
+        # 1. Try win32com GetActiveObject
+        for prog_id in ["CSI.ETABS.API.ETABSObject", "ETABSv1.ETABSObject"]:
+            try:
+                import win32com.client
+                self.ETABSObject = win32com.client.GetActiveObject(prog_id)
+                if self.ETABSObject and hasattr(self.ETABSObject, "SapModel"):
+                    self.SapModel = self.ETABSObject.SapModel
+                    self.is_connected = True
+                    return True, "Connected to active ETABS instance via win32com."
+            except Exception:
+                pass
 
+        # 2. Try comtypes via ETABSv1.tlb type library
         try:
             import comtypes.client
-            helper = comtypes.client.CreateObject('ETABSv1.Helper')
-            helper = helper.QueryInterface(comtypes.gen.ETABSv1.cHelper)
-            self.ETABSObject = helper.GetObject("CSI.ETABS.API.ETABSObject")
-            self.SapModel = self.ETABSObject.SapModel
-            self.is_connected = True
-            return True, "Connected to active ETABS instance via ETABSv1.Helper."
+            import glob
+            tlb_files = glob.glob(r"C:\Program Files\Computers and Structures\ETABS*\NativeAPI\*\ETABSv1.tlb") + \
+                        glob.glob(r"C:\Program Files\Computers and Structures\ETABS*\ETABSv1.tlb")
+            if tlb_files:
+                comtypes.client.GetModule(tlb_files[0])
+                import comtypes.gen.ETABSv1 as etabs
+                helper = comtypes.client.CreateObject(etabs.Helper, interface=etabs.cHelper)
+                for prog_id in ["CSI.ETABS.API.ETABSObject", "ETABSv1.ETABSObject", ""]:
+                    try:
+                        self.ETABSObject = helper.GetObject(prog_id)
+                        if self.ETABSObject and hasattr(self.ETABSObject, "SapModel"):
+                            self.SapModel = self.ETABSObject.SapModel
+                            self.is_connected = True
+                            return True, f"Connected to active ETABS instance via OAPI (Version {helper.GetOAPIVersionNumber()})."
+                    except Exception:
+                        pass
         except Exception:
             pass
 
@@ -46,17 +60,29 @@ class ETABSCOMAdapter:
         if running:
             return True, msg
 
-        # 2. Launch new background ETABS application instance if ETABS is not already running
+        # 2. Try launching ETABS via comtypes ETABSv1.tlb helper
         try:
             import comtypes.client
-            helper = comtypes.client.CreateObject('ETABSv1.Helper')
-            helper = helper.QueryInterface(comtypes.gen.ETABSv1.cHelper)
-            self.ETABSObject = helper.CreateObjectProgID("CSI.ETABS.API.ETABSObject")
-            if self.ETABSObject:
-                self.ETABSObject.ApplicationStart()
-                self.SapModel = self.ETABSObject.SapModel
-                self.is_connected = True
-                return True, "Successfully started new ETABS application instance via COM API."
+            import glob
+            tlb_files = glob.glob(r"C:\Program Files\Computers and Structures\ETABS*\NativeAPI\*\ETABSv1.tlb") + \
+                        glob.glob(r"C:\Program Files\Computers and Structures\ETABS*\ETABSv1.tlb")
+            exe_files = glob.glob(r"C:\Program Files\Computers and Structures\ETABS*\ETABS.exe")
+
+            if tlb_files:
+                comtypes.client.GetModule(tlb_files[0])
+                import comtypes.gen.ETABSv1 as etabs
+                helper = comtypes.client.CreateObject(etabs.Helper, interface=etabs.cHelper)
+
+                if exe_files:
+                    self.ETABSObject = helper.CreateObject(exe_files[0])
+                else:
+                    self.ETABSObject = helper.CreateObjectProgID("CSI.ETABS.API.ETABSObject")
+
+                if self.ETABSObject:
+                    self.ETABSObject.ApplicationStart()
+                    self.SapModel = self.ETABSObject.SapModel
+                    self.is_connected = True
+                    return True, f"Successfully launched ETABS 22 OAPI session (Version {helper.GetOAPIVersionNumber()})."
         except Exception:
             pass
 

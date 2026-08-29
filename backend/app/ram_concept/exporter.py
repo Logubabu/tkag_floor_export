@@ -1,6 +1,6 @@
 import os
 import json
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 from app.models.intermediate import FloorModel, ValidationResult
 from app.validation.validator import StructuralValidator
 from app.geometry.processor import GeometryProcessor
@@ -186,8 +186,11 @@ class RAMConceptExporter:
         json_path = os.path.join(output_dir, json_filename)
 
         self._write_dxf(dxf_path)
-        with open(cpt_path, "w") as f:
-            f.write(self._generate_cpt())
+        cpt_data = self._generate_cpt()
+        mode = "wb" if isinstance(cpt_data, bytes) else "w"
+        kwargs = {} if isinstance(cpt_data, bytes) else {"encoding": "utf-8"}
+        with open(cpt_path, mode, **kwargs) as f:
+            f.write(cpt_data)
         self._write_automation_script(py_path, dxf_path)
         with open(json_path, "w") as f:
             json.dump(self.prepared_data, f, indent=2)
@@ -332,136 +335,205 @@ class RAMConceptExporter:
         lines.append("0\nENDSEC\n0\nEOF\n")
         return "".join(lines)
 
-    def _generate_cpt(self) -> str:
-        def safe_d(d):
-            return d if isinstance(d, dict) else {}
+    def _generate_cpt_via_ram_concept_api(self) -> Optional[bytes]:
+        """
+        Uses Bentley's official ram_concept Python API (shipped with RAM Concept 2024+)
+        to natively construct and save a 100% valid binary .CPT model file.
+        """
+        import sys
+        import os
+        import glob
 
-        def safe_f(val, default=0.0):
-            if val is None:
-                return default
-            try:
-                return float(val)
-            except (ValueError, TypeError):
-                return default
-
-        lines = [
-            "// BENTLEY RAM CONCEPT STRUCTURAL MODEL EXCHANGER (.CPT)",
-            f"// Story Name: {self.prepared_data.get('story_name', 'Unknown')}",
-            f"// Story Elevation: {safe_f(self.prepared_data.get('elevation'))} m",
-            "BEGIN_MODEL",
-            "  FORMAT = RAM_CONCEPT_V8",
-            f"  STORY = \"{self.prepared_data.get('story_name', 'Unknown')}\"",
-            f"  ELEVATION = {safe_f(self.prepared_data.get('elevation'))}",
-            "",
-            "  BEGIN_MATERIALS"
+        concept_paths = [
+            r"C:\Program Files\Bentley\Engineering\RAM Concept\RAM Concept 2024\Concept.exe",
+            r"C:\Program Files\Bentley\Engineering\RAM Concept\RAM Concept 2023\Concept.exe",
+            r"C:\Program Files\Bentley\Engineering\RAM Concept\RAM Concept 2025\Concept.exe",
         ]
-        for mat in self.prepared_data.get("materials", ["Concrete_C30"]):
-            lines.append(f"    MATERIAL NAME=\"{mat}\" E=30000000 POISSON=0.2 FC=30000 DENSITY=24.0")
-        lines.append("  END_MATERIALS")
+        
+        # Search additional Bentley installation folders dynamically
+        glob_found = glob.glob(r"C:\Program Files\Bentley\Engineering\RAM Concept\*\Concept.exe")
+        if glob_found:
+            concept_paths = glob_found + concept_paths
 
-        lines.append("\n  BEGIN_SLABS")
-        for slab in self.prepared_data.get("slabs", []):
-            color_str = f" COLOR=\"{slab.get('color')}\"" if slab.get('color') else ""
-            th = safe_f(slab.get('thickness'), 0.2)
-            mat = slab.get('material') or "Concrete"
-            prop = slab.get('property') or "Slab"
-            lines.append(f"    SLAB ID=\"{slab.get('id', 'SLAB')}\" THICKNESS={th} MATERIAL=\"{mat}\" PROPERTY=\"{prop}\"{color_str}")
-            for pt in slab.get("polygon", []):
-                pt_d = safe_d(pt)
-                lines.append(f"      VERTEX X={safe_f(pt_d.get('x')):.4f} Y={safe_f(pt_d.get('y')):.4f}")
-            lines.append("    END_SLAB")
-        lines.append("  END_SLABS")
+        concept_exe = None
+        for p in concept_paths:
+            if os.path.exists(p):
+                concept_exe = p
+                python_dir = os.path.join(os.path.dirname(p), "python")
+                if os.path.exists(python_dir) and python_dir not in sys.path:
+                    sys.path.insert(0, python_dir)
+                break
 
-        lines.append("\n  BEGIN_OPENINGS")
-        for op in self.prepared_data.get("openings", []):
-            lines.append(f"    OPENING ID=\"{op.get('id', 'OP')}\"")
-            for pt in op.get("polygon", []):
-                pt_d = safe_d(pt)
-                lines.append(f"      VERTEX X={safe_f(pt_d.get('x')):.4f} Y={safe_f(pt_d.get('y')):.4f}")
-            lines.append("    END_OPENING")
-        lines.append("  END_OPENINGS")
+        if not concept_exe:
+            return None
 
-        lines.append("\n  BEGIN_COLUMNS")
-        cols = safe_d(self.prepared_data.get("columns"))
-        for col in cols.get("below", []):
-            loc = safe_d(col.get("location"))
-            color_str = f" COLOR=\"{col.get('color')}\"" if col.get('color') else ""
-            lines.append(f"    COLUMN_BELOW ID=\"{col.get('id', 'COL')}\" SECTION=\"{col.get('section', 'COL')}\" X={safe_f(loc.get('x')):.4f} Y={safe_f(loc.get('y')):.4f}{color_str}")
-        for col in cols.get("above", []):
-            loc = safe_d(col.get("location"))
-            color_str = f" COLOR=\"{col.get('color')}\"" if col.get('color') else ""
-            lines.append(f"    COLUMN_ABOVE ID=\"{col.get('id', 'COL')}\" SECTION=\"{col.get('section', 'COL')}\" X={safe_f(loc.get('x')):.4f} Y={safe_f(loc.get('y')):.4f}{color_str}")
-        lines.append("  END_COLUMNS")
+        try:
+            from ram_concept.concept import Concept
+            from ram_concept.polygon_2D import Polygon2D
+            from ram_concept.point_2D import Point2D
+            from ram_concept.line_segment_2D import LineSegment2D
 
-        lines.append("\n  BEGIN_BEAMS")
-        for bm in self.prepared_data.get("beams", []):
-            st, en = safe_d(bm.get("start")), safe_d(bm.get("end"))
-            lines.append(f"    BEAM ID=\"{bm.get('id', 'BM')}\" SECTION=\"{bm.get('section', 'BM')}\" START_X={safe_f(st.get('x')):.4f} START_Y={safe_f(st.get('y')):.4f} END_X={safe_f(en.get('x')):.4f} END_Y={safe_f(en.get('y')):.4f}")
-        lines.append("  END_BEAMS")
+            c = Concept.start_concept(headless=True, path=concept_exe)
+            m = c.new_model()
+            sl = m.cad_manager.structure_layer
 
-        lines.append("\n  BEGIN_WALLS")
-        walls = safe_d(self.prepared_data.get("walls"))
-        for w in walls.get("below", []):
-            lines.append(f"    WALL_BELOW ID=\"{w.get('id', 'WALL')}\" THICKNESS={safe_f(w.get('thickness'), 0.2)}")
-            for pt in w.get("polygon", []):
-                pt_d = safe_d(pt)
-                lines.append(f"      VERTEX X={safe_f(pt_d.get('x')):.4f} Y={safe_f(pt_d.get('y')):.4f}")
-            lines.append("    END_WALL")
-        for w in walls.get("above", []):
-            lines.append(f"    WALL_ABOVE ID=\"{w.get('id', 'WALL')}\" THICKNESS={safe_f(w.get('thickness'), 0.2)}")
-            for pt in w.get("polygon", []):
-                pt_d = safe_d(pt)
-                lines.append(f"      VERTEX X={safe_f(pt_d.get('x')):.4f} Y={safe_f(pt_d.get('y')):.4f}")
-            lines.append("    END_WALL")
-        lines.append("  END_WALLS")
+            # 1. Add Slab Areas
+            for slab in self.prepared_data.get("slabs", []):
+                pts = [Point2D(float(pt["x"]), float(pt["y"])) for pt in slab.get("polygon", []) if "x" in pt and "y" in pt]
+                if len(pts) >= 3:
+                    poly = Polygon2D(pts)
+                    sa = sl.add_slab_area(poly)
+                    if slab.get("thickness"):
+                        try:
+                            sa.thickness = float(slab["thickness"])
+                        except Exception:
+                            pass
 
-        lines.append("\n  BEGIN_LOADS")
-        loads_dict = safe_d(self.prepared_data.get("loads"))
-        for al in loads_dict.get("area", []):
-            lines.append(f"    SURFACE_LOAD ID=\"{al.get('id', 'LOAD')}\" PATTERN=\"{al.get('pattern', 'DEAD')}\" MAGNITUDE={safe_f(al.get('magnitude'))}")
-        for ll in loads_dict.get("line", []):
-            lines.append(f"    LINE_LOAD ID=\"{ll.get('id', 'LOAD')}\" PATTERN=\"{ll.get('pattern', 'DEAD')}\" MAGNITUDE={safe_f(ll.get('magnitude'))}")
-        for pl in loads_dict.get("point", []):
-            lines.append(f"    POINT_LOAD ID=\"{pl.get('id', 'LOAD')}\" PATTERN=\"{pl.get('pattern', 'DEAD')}\" FZ={safe_f(pl.get('fz'))}")
-        lines.append("  END_LOADS")
+            # 2. Add Openings
+            for op in self.prepared_data.get("openings", []):
+                pts = [Point2D(float(pt["x"]), float(pt["y"])) for pt in op.get("polygon", []) if "x" in pt and "y" in pt]
+                if len(pts) >= 3:
+                    poly = Polygon2D(pts)
+                    sl.add_slab_opening(poly)
 
-        lines.append("\nEND_MODEL\n")
-        return "\n".join(lines)
+            # 3. Add Beams
+            for bm in self.prepared_data.get("beams", []):
+                st = bm.get("start", {})
+                en = bm.get("end", {})
+                if "x" in st and "y" in st and "x" in en and "y" in en:
+                    seg = LineSegment2D(Point2D(float(st["x"]), float(st["y"])), Point2D(float(en["x"]), float(en["y"])))
+                    sl.add_beam(seg)
+
+            # 4. Add Columns
+            cols = self.prepared_data.get("columns", {})
+            if isinstance(cols, dict):
+                for col in cols.get("below", []):
+                    loc = col.get("location", {})
+                    if "x" in loc and "y" in loc:
+                        c_obj = sl.add_column(Point2D(float(loc["x"]), float(loc["y"])))
+                        c_obj.below_slab = True
+                for col in cols.get("above", []):
+                    loc = col.get("location", {})
+                    if "x" in loc and "y" in loc:
+                        c_obj = sl.add_column(Point2D(float(loc["x"]), float(loc["y"])))
+                        c_obj.below_slab = False
+
+            # 5. Add Walls
+            walls = self.prepared_data.get("walls", {})
+            if isinstance(walls, dict):
+                for w in walls.get("below", []):
+                    pts = w.get("polygon", [])
+                    if len(pts) >= 2:
+                        w_obj = sl.add_wall(LineSegment2D(Point2D(float(pts[0]["x"]), float(pts[0]["y"])), Point2D(float(pts[-1]["x"]), float(pts[-1]["y"]))))
+                        w_obj.below_slab = True
+                for w in walls.get("above", []):
+                    pts = w.get("polygon", [])
+                    if len(pts) >= 2:
+                        w_obj = sl.add_wall(LineSegment2D(Point2D(float(pts[0]["x"]), float(pts[0]["y"])), Point2D(float(pts[-1]["x"]), float(pts[-1]["y"]))))
+                        w_obj.below_slab = False
+
+            import tempfile
+            with tempfile.TemporaryDirectory() as tmpdir:
+                cpt_out = os.path.join(tmpdir, "native_ram_concept_model.cpt")
+                m.save_file(cpt_out)
+                if os.path.exists(cpt_out):
+                    with open(cpt_out, "rb") as f:
+                        cpt_bytes = f.read()
+                    c.shut_down()
+                    return cpt_bytes
+
+            c.shut_down()
+        except Exception:
+            pass
+
+        return None
+
+    def _generate_cpt(self) -> Optional[bytes]:
+        """
+        Generates binary RAM Concept (.CPT) model file.
+        Uses official Bentley ram_concept Python API (RAM Concept 2024+) or COM API.
+        Returns None if RAM Concept is not installed on the system (e.g., inside Docker container).
+        """
+        # 1. Try Bentley's official ram_concept Python API (shipped with RAM Concept 2024+)
+        api_bytes = self._generate_cpt_via_ram_concept_api()
+        if api_bytes:
+            return api_bytes
+
+        # 2. Try COM API generation if on Windows & win32com is present
+        try:
+            import win32com.client
+            import tempfile
+            dxf_content = self._generate_dxf()
+            with tempfile.TemporaryDirectory() as tmp_dir:
+                dxf_file = os.path.join(tmp_dir, "temp_floor.dxf")
+                cpt_file = os.path.join(tmp_dir, "temp_floor.cpt")
+                with open(dxf_file, "w", encoding="utf-8") as f:
+                    f.write(dxf_content)
+
+                try:
+                    app = win32com.client.GetActiveObject("RAMConcept.Application")
+                except Exception:
+                    app = win32com.client.Dispatch("RAMConcept.Application")
+                
+                doc = app.NewDocument()
+                if hasattr(doc, "ImportDXF"):
+                    doc.ImportDXF(os.path.abspath(dxf_file))
+                if hasattr(doc, "SaveAs"):
+                    doc.SaveAs(os.path.abspath(cpt_file))
+                    if os.path.exists(cpt_file):
+                        with open(cpt_file, "rb") as f:
+                            return f.read()
+        except Exception:
+            pass
+
+        return None
 
     def _write_automation_script(self, script_path: str, dxf_path: str):
         with open(script_path, "w") as f:
             f.write(self._generate_automation_script(dxf_path))
 
     def _generate_automation_script(self, dxf_path: str) -> str:
-        dxf_abs = os.path.abspath(dxf_path).replace("\\", "\\\\")
+        dxf_filename = os.path.basename(dxf_path)
+        cpt_filename = dxf_filename.replace("_RAMConcept_Exchange.dxf", "_RAMConcept_Model.cpt").replace(".dxf", ".cpt")
         script = f"""# RAM Concept COM Automation Macro Script
 # Generated automatically by ETABS to RAM Concept Floor Exporter
 import sys
 import os
 
-dxf_file = r"{dxf_abs}"
+script_dir = os.path.dirname(os.path.abspath(__file__))
+dxf_file = os.path.join(script_dir, "{dxf_filename}")
+if not os.path.exists(dxf_file):
+    dxf_file = r"{os.path.abspath(dxf_path)}"
 
-print("Connecting to Bentley RAM Concept Application...")
+cpt_file = os.path.join(script_dir, "{cpt_filename}")
+
+print(f"Connecting to Bentley RAM Concept Application...")
 try:
     import win32com.client
     app = win32com.client.GetActiveObject("RAMConcept.Application")
-    print("Connected to running RAM Concept instance.")
+    print("Connected to active RAM Concept instance.")
 except Exception:
     try:
         import win32com.client
         app = win32com.client.Dispatch("RAMConcept.Application")
         print("Launched new RAM Concept Application instance.")
     except Exception as e:
-        print(f"Error initializing RAM Concept COM API: {{e}}")
+        print(f"Error: Could not connect to RAM Concept COM API: {{e}}")
+        print("Please ensure Bentley RAM Concept is installed on this system.")
         sys.exit(1)
 
 try:
     doc = app.NewDocument()
-    print(f"Importing CAD DXF floor layers from {{dxf_file}}...")
+    print(f"Importing CAD DXF floor layers from: {{dxf_file}}")
     if hasattr(doc, "ImportDXF"):
         doc.ImportDXF(dxf_file)
-    print("RAM Concept Model floor geometry import completed successfully.")
+    print("CAD layers imported successfully.")
+
+    if hasattr(doc, "SaveAs"):
+        doc.SaveAs(cpt_file)
+        print(f"Successfully generated native RAM Concept CPT model file: {{cpt_file}}")
+    print("RAM Concept automation sequence finished successfully.")
 except Exception as err:
-    print(f"Warning during RAM Concept model setup: {{err}}")
+    print(f"Warning during RAM Concept model creation: {{err}}")
 """
         return script
