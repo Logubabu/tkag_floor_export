@@ -33,10 +33,27 @@ def health_check():
         "service": "ETABS to RAM Concept Floor Extraction Engine"
     }
 
-# Mount frontend static assets if available (Unified Single Container)
-STATIC_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "static"))
+# Mount frontend static assets if available (Unified Single Executable / Container)
+import sys
 
-if os.path.exists(STATIC_DIR):
+if getattr(sys, 'frozen', False):
+    base_path = sys._MEIPASS
+else:
+    base_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+
+static_candidates = [
+    os.path.join(base_path, "static"),
+    os.path.join(base_path, "frontend", "dist"),
+    os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "static")),
+]
+
+STATIC_DIR = None
+for cand in static_candidates:
+    if os.path.exists(cand) and os.path.exists(os.path.join(cand, "index.html")):
+        STATIC_DIR = cand
+        break
+
+if STATIC_DIR:
     assets_dir = os.path.join(STATIC_DIR, "assets")
     if os.path.exists(assets_dir):
         app.mount("/assets", StaticFiles(directory=assets_dir), name="static_assets")
