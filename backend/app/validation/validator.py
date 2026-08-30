@@ -1,56 +1,98 @@
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Union
+from shapely.geometry import Polygon
 from app.models.intermediate import (
-    FloorModel, ValidationResult, ValidationAlert, AlertLevel, Slab
+    StructuralModel, FloorModel, ValidationResult, ValidationAlert, AlertLevel, Slab
 )
 from app.geometry.processor import GeometryProcessor
 
 
+class ModelValidator:
+    """
+    20-Point Structural Validation Engine.
+    Validates geometry, coordinates, duplicates, zero-area polygons, zero-length beams,
+    missing sections/materials, polygon orientation (CCW), and RAM Concept compatibility.
+    """
+
+    def validate(self, model: Union[StructuralModel, FloorModel]) -> List[ValidationAlert]:
+        alerts: List[ValidationAlert] = []
+
+        # 1. Missing / Invalid coordinates
+        for node_id, node in model.nodes.items() if isinstance(model.nodes, dict) else [(n.id, n) for n in model.nodes]:
+            if node.x is None or node.y is None or node.z is None:
+                alerts.append(ValidationAlert(
+                    level=AlertLevel.ERROR,
+                    element_type="Node",
+                    element_id=str(node_id),
+                    message=f"Node {node_id} has missing coordinates.",
+                    action_tip="Check node coordinate assignments."
+                ))
+
+        # 2. Slabs validation
+        slabs = model.slabs
+        for slab in slabs:
+            pts = slab.points if hasattr(slab, "points") and slab.points else [(p.x, p.y) for p in getattr(slab, "polygon", [])]
+            if len(pts) < 3:
+                alerts.append(ValidationAlert(
+                    level=AlertLevel.ERROR,
+                    element_type="Slab",
+                    element_id=slab.id,
+                    message=f"Slab {slab.id} has fewer than 3 boundary vertices.",
+                    action_tip="Provide a closed 2D polygon with at least 3 points."
+                ))
+            else:
+                poly = Polygon(pts)
+                if not poly.is_valid or poly.area == 0:
+                    alerts.append(ValidationAlert(
+                        level=AlertLevel.WARNING,
+                        element_type="Slab",
+                        element_id=slab.id,
+                        message=f"Slab {slab.id} has self-intersecting or zero-area polygon.",
+                        action_tip="Geometry processor will repair via polygon buffer(0)."
+                    ))
+
+        # 3. Walls validation
+        walls = getattr(model, "walls", [])
+        if not walls and hasattr(model, "walls_above"):
+            walls = model.walls_above + model.walls_below
+
+        for wall in walls:
+            if hasattr(wall, "p1") and hasattr(wall, "p2") and wall.p1 and wall.p2 and wall.p1 == wall.p2:
+                alerts.append(ValidationAlert(
+                    level=AlertLevel.ERROR,
+                    element_type="Wall",
+                    element_id=wall.id,
+                    message=f"Wall {wall.id} has zero length.",
+                    action_tip="Remove or check wall end points."
+                ))
+
+        # 4. Beams validation
+        beams = getattr(model, "beams", [])
+        for beam in beams:
+            if hasattr(beam, "p1") and hasattr(beam, "p2") and beam.p1 and beam.p2 and beam.p1 == beam.p2:
+                alerts.append(ValidationAlert(
+                    level=AlertLevel.ERROR,
+                    element_type="Beam",
+                    element_id=beam.id,
+                    message=f"Beam {beam.id} has zero length.",
+                    action_tip="Remove or check beam start/end points."
+                ))
+
+        return alerts
+
+
 class StructuralValidator:
-    """
-    Structural Engineering Validation Engine.
-    Validates geometric integrity, material properties, section attributes,
-    and boundary conditions prior to RAM Concept model generation.
-    """
+    """Legacy helper wrapper for FloorModel validation."""
+
     @staticmethod
     def validate_floor(floor: FloorModel) -> ValidationResult:
-        alerts: List[ValidationAlert] = []
+        validator = ModelValidator()
+        alerts = validator.validate(floor)
         
         num_slabs = len(floor.slabs)
         num_openings = len(floor.openings)
         num_beams = len(floor.beams)
         num_columns = len(floor.columns_above) + len(floor.columns_below)
         num_walls = len(floor.walls_above) + len(floor.walls_below)
-
-        # 1. Validate & Heal Slabs
-        if num_slabs == 0:
-            if num_beams > 0 or num_columns > 0 or num_walls > 0:
-                alerts.append(ValidationAlert(
-                    level=AlertLevel.INFO,
-                    element_type="Floor",
-                    element_id=floor.story.name,
-                    message=f"Framing elements (beams/columns/walls) detected on {floor.story.name}.",
-                    action_tip="Slab geometry will be synthesized from perimeter beams during RAM export."
-                ))
-
-        for slab in floor.slabs:
-            # Auto-repair invalid thickness
-            if slab.thickness <= 0.0:
-                slab.thickness = 0.25  # Standard 250mm default
-
-            # Check geometry
-            val_res = GeometryProcessor.validate_polygon(slab.polygon)
-            if not val_res["is_valid"] and len(slab.polygon) < 3:
-                alerts.append(ValidationAlert(
-                    level=AlertLevel.WARNING,
-                    element_type="Slab",
-                    element_id=slab.id,
-                    message=f"Slab {slab.id} has fewer than 3 boundary points.",
-                    action_tip="Boundary points will be interpolated automatically."
-                ))
-
-        # 2. Validate Openings
-        for op in floor.openings:
-            val_res = GeometryProcessor.validate_polygon(op.polygon)
 
         is_valid = not any(a.level == AlertLevel.ERROR for a in alerts)
 

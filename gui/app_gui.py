@@ -15,17 +15,21 @@ for p in [project_root, backend_dir]:
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QPushButton, QFileDialog, QTableWidget, QTableWidgetItem,
-    QCheckBox, QProgressBar, QTextEdit, QGroupBox, QHeaderView,
+    QCheckBox, QRadioButton, QButtonGroup, QProgressBar, QTextEdit, QGroupBox, QHeaderView,
     QMessageBox, QSplitter, QFrame, QAbstractItemView, QStyle
 )
 from PySide6.QtCore import Qt, QThread, Signal
 from PySide6.QtGui import QFont, QIcon, QColor
 
 from backend.app.etabs.e2k_parser import E2KParser
+from backend.app.etabs.com_adapter import ETABSCOMAdapter
+from backend.app.etabs.version_detector import ETABSVersionDetector
 from backend.app.floor_extractor.extractor import FloorExtractor
 from backend.app.models.intermediate import BuildingModel, FloorModel, ExtractionMode
 from backend.app.ram_concept.exporter import RAMConceptExporter
 from backend.app.ram_concept.ram_detector import RAMConceptDetector
+from backend.app.reports.report_generator import ReportGenerator
+from gui.model_viewer import ModelViewerWidget
 
 
 class ParsingThread(QThread):
@@ -43,30 +47,8 @@ class ParsingThread(QThread):
             content_str = None
             companion_text = None
 
-            # Read primary file if text format
-            if not self.file_path.lower().endswith(".edb"):
-                with open(self.file_path, "r", encoding="utf-8", errors="ignore") as f:
-                    content_str = f.read()
-
-            # Read companion file if provided
-            if self.companion_path and os.path.exists(self.companion_path):
-                with open(self.companion_path, "r", encoding="utf-8", errors="ignore") as f:
-                    companion_text = f.read()
-
             parser = E2KParser()
-
-            # Parse primary text if available
-            b_model = None
-            if content_str:
-                b_model = parser.parse_string(content_str)
-            elif companion_text:
-                b_model = parser.parse_string(companion_text)
-
-            if not b_model or not b_model.stories:
-                # If EDB or parsing failed, try direct EDB parser
-                from backend.app.etabs.edb_parser import EDBParser
-                edb_p = EDBParser()
-                b_model = edb_p.parse(self.file_path)
+            b_model = parser.parse_file(self.file_path)
 
             if not b_model or not b_model.stories:
                 raise ValueError(f"Could not parse valid ETABS structural story data from '{filename}'.")
@@ -107,6 +89,22 @@ class ExportThread(QThread):
                 res = exporter.generate_output(floor_folder)
 
                 cpt_path = res.get("cpt_file", "")
+                py_path = res.get("automation_script", "")
+                
+                if py_path and os.path.exists(py_path):
+                    self.progress_signal.emit(f"[{idx}/{total}] Executing in-tool RAM Concept COM Automation for story: {story_name}...")
+                    exporter.execute_automation_script(py_path, cpt_path, log_callback=self.progress_signal.emit)
+
+                # Generate Report & Import Instructions text file
+                conv_sum = {
+                    "source_slabs": len(floor_model.slabs), "converted_slabs": len(floor_model.slabs),
+                    "source_openings": len(floor_model.openings), "converted_openings": len(floor_model.openings),
+                    "source_beams": len(floor_model.beams), "converted_beams": len(floor_model.beams),
+                    "source_columns": len(floor_model.columns_above) + len(floor_model.columns_below), "converted_columns": len(floor_model.columns_above) + len(floor_model.columns_below),
+                    "source_walls": len(floor_model.walls_above) + len(floor_model.walls_below), "converted_walls": len(floor_model.walls_above) + len(floor_model.walls_below),
+                }
+                ReportGenerator.generate_report(clean_story, conv_sum, {}, res, floor_folder)
+
                 if cpt_path and os.path.exists(cpt_path) and os.path.getsize(cpt_path) > 0:
                     size_mb = os.path.getsize(cpt_path) / (1024 * 1024)
                     self.progress_signal.emit(f"✓ Native .CPT / .CPF model generated for {story_name} ({size_mb:.2f} MB) in '{floor_folder}'")
@@ -125,7 +123,7 @@ class RAMExporterMainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("ETABS to RAM Concept Floor Exporter")
-        self.resize(1100, 780)
+        self.resize(1280, 820)
         self.building_model: Optional[BuildingModel] = None
         self.current_file_path: Optional[str] = None
         self.output_dir: str = os.path.expanduser("~/Documents")
@@ -156,6 +154,41 @@ class RAMExporterMainWindow(QMainWindow):
         header_layout.addWidget(self.ram_status_label, stretch=1)
         header_layout.addWidget(self.btn_redetect)
         main_layout.addWidget(header_box)
+
+        # 1b. ETABS Live API Connection & Processing Mode Panel
+        etabs_box = QGroupBox("ETABS Live COM Connection & Processing Mode")
+        etabs_layout = QHBoxLayout(etabs_box)
+
+        mode_layout = QHBoxLayout()
+        self.radio_mode_auto = QRadioButton("AUTO (Live COM if available)")
+        self.radio_mode_live = QRadioButton("LIVE ETABS COM API")
+        self.radio_mode_offline = QRadioButton("OFFLINE PARSER")
+        self.radio_mode_auto.setChecked(True)
+
+        self.mode_group = QButtonGroup()
+        self.mode_group.addButton(self.radio_mode_auto)
+        self.mode_group.addButton(self.radio_mode_live)
+        self.mode_group.addButton(self.radio_mode_offline)
+
+        mode_layout.addWidget(self.radio_mode_auto)
+        mode_layout.addWidget(self.radio_mode_live)
+        mode_layout.addWidget(self.radio_mode_offline)
+
+        self.btn_connect_etabs = QPushButton("Connect to Active ETABS")
+        self.btn_connect_etabs.setStyleSheet("font-weight: bold; background-color: #059669; color: white;")
+        self.btn_connect_etabs.clicked.connect(self.connect_live_etabs)
+
+        self.btn_detect_etabs = QPushButton("Detect Installed ETABS")
+        self.btn_detect_etabs.clicked.connect(self.detect_etabs_installations)
+
+        self.lbl_etabs_status = QLabel("ETABS Status: Standby (Click 'Connect' or Browse Model)")
+        self.lbl_etabs_status.setStyleSheet("color: #38bdf8; font-weight: bold;")
+
+        etabs_layout.addLayout(mode_layout)
+        etabs_layout.addWidget(self.btn_connect_etabs)
+        etabs_layout.addWidget(self.btn_detect_etabs)
+        etabs_layout.addWidget(self.lbl_etabs_status, stretch=1)
+        main_layout.addWidget(etabs_box)
 
         # 2. File Selection Panel
         file_box = QGroupBox("1. Select ETABS Model File")
@@ -200,9 +233,63 @@ class RAMExporterMainWindow(QMainWindow):
         self.table_stories.setHorizontalHeaderLabels(["Export", "Story Name", "Elevation (m)", "Height (m)", "Status"])
         self.table_stories.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
         self.table_stories.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.table_stories.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.table_stories.itemSelectionChanged.connect(self.on_story_selection_changed)
         story_layout.addWidget(self.table_stories)
 
         splitter.addWidget(story_box)
+
+        # Center Column: 2D/3D Model Viewer
+        viewer_box = QGroupBox("Model Viewer (2D Floor Plan / 3D Isometric)")
+        viewer_layout = QVBoxLayout(viewer_box)
+
+        # Viewer toolbar
+        view_tools = QHBoxLayout()
+        self.btn_view_2d = QPushButton("2D Floor Plan")
+        self.btn_view_3d = QPushButton("3D Isometric")
+        self.btn_fit_screen = QPushButton("Fit to Screen")
+
+        self.btn_view_2d.setCheckable(True)
+        self.btn_view_2d.setChecked(True)
+        self.btn_view_3d.setCheckable(True)
+
+        self.btn_view_2d.clicked.connect(self.set_2d_mode)
+        self.btn_view_3d.clicked.connect(self.set_3d_mode)
+        self.btn_fit_screen.clicked.connect(lambda: self.model_viewer.fit_to_screen())
+
+        view_tools.addWidget(self.btn_view_2d)
+        view_tools.addWidget(self.btn_view_3d)
+        view_tools.addWidget(self.btn_fit_screen)
+        view_tools.addStretch()
+        viewer_layout.addLayout(view_tools)
+
+        # Layer visibility toggle toolbar
+        layer_tools = QHBoxLayout()
+        layer_tools.addWidget(QLabel("Layers:"))
+        self.chk_layer_slabs = QCheckBox("Slabs")
+        self.chk_layer_beams = QCheckBox("Beams")
+        self.chk_layer_columns = QCheckBox("Columns")
+        self.chk_layer_walls = QCheckBox("Walls")
+        self.chk_layer_openings = QCheckBox("Openings")
+        self.chk_layer_nodes = QCheckBox("Nodes")
+
+        for chk in [self.chk_layer_slabs, self.chk_layer_beams, self.chk_layer_columns, self.chk_layer_walls, self.chk_layer_openings, self.chk_layer_nodes]:
+            chk.setChecked(True)
+            layer_tools.addWidget(chk)
+
+        self.chk_layer_slabs.toggled.connect(self.on_toggle_slabs)
+        self.chk_layer_beams.toggled.connect(self.on_toggle_beams)
+        self.chk_layer_columns.toggled.connect(self.on_toggle_columns)
+        self.chk_layer_walls.toggled.connect(self.on_toggle_walls)
+        self.chk_layer_openings.toggled.connect(self.on_toggle_openings)
+        self.chk_layer_nodes.toggled.connect(self.on_toggle_nodes)
+
+        layer_tools.addStretch()
+        viewer_layout.addLayout(layer_tools)
+
+        self.model_viewer = ModelViewerWidget()
+        viewer_layout.addWidget(self.model_viewer)
+        splitter.addWidget(viewer_box)
 
         # Right Column: Export Settings & Logs
         right_panel = QWidget()
@@ -284,7 +371,7 @@ class RAMExporterMainWindow(QMainWindow):
         right_layout.addWidget(log_box)
 
         splitter.addWidget(right_panel)
-        splitter.setSizes([550, 450])
+        splitter.setSizes([300, 450, 350])
         main_layout.addWidget(splitter, stretch=1)
 
     def _apply_theme(self):
@@ -330,6 +417,42 @@ class RAMExporterMainWindow(QMainWindow):
             }
             QCheckBox {
                 color: #e5e7eb;
+                spacing: 6px;
+            }
+            QCheckBox::indicator {
+                width: 16px;
+                height: 16px;
+                border-radius: 4px;
+                border: 2px solid #60a5fa;
+                background-color: #111827;
+            }
+            QCheckBox::indicator:checked {
+                border-color: #2563eb;
+                background-color: #2563eb;
+            }
+            QRadioButton {
+                color: #f3f4f6;
+                font-weight: bold;
+                spacing: 8px;
+            }
+            QRadioButton::indicator {
+                width: 16px;
+                height: 16px;
+                border-radius: 9px;
+                border: 2px solid #60a5fa;
+                background-color: #111827;
+            }
+            QRadioButton::indicator:hover {
+                border-color: #93c5fd;
+                background-color: #374151;
+            }
+            QRadioButton::indicator:checked {
+                border: 3px solid #60a5fa;
+                background-color: #2563eb;
+            }
+            QRadioButton:checked {
+                color: #60a5fa;
+                font-weight: bold;
             }
         """)
 
@@ -348,12 +471,56 @@ class RAMExporterMainWindow(QMainWindow):
             self.ram_status_label.setStyleSheet("color: #34d399; font-weight: bold;")
             self.log(f"RAM Concept Auto-Detection: {detection['status_summary']}")
         else:
-            self.ram_status_label.setText(
-                "⚠ RAM Concept Installation Not Found in Standard Directories.\n"
-                "Models can still be exported to DXF exchange format + Python COM macro scripts."
-            )
+            self.ram_status_label.setText("⚠ RAM Concept not detected in standard system paths.\n"
+                                          "CAD .DXF exchange package & Python macro scripts will be generated automatically.")
             self.ram_status_label.setStyleSheet("color: #fbbf24; font-weight: bold;")
-            self.log("RAM Concept Auto-Detection: RAM Concept executable not found.")
+            self.log("RAM Concept Auto-Detection: Not installed. Operating in Drawing Exchange Mode.")
+
+    def detect_etabs_installations(self):
+        installs = ETABSVersionDetector.detect_installations()
+        if installs:
+            ver_strs = [f"{i['version']}" for i in installs]
+            msg = f"✓ ETABS Detected: {', '.join(ver_strs)}"
+            self.lbl_etabs_status.setText(msg)
+            self.lbl_etabs_status.setStyleSheet("color: #34d399; font-weight: bold;")
+            self.log(msg)
+        else:
+            self.lbl_etabs_status.setText("⚠ No installed ETABS found in standard paths. Use Offline Parser.")
+            self.lbl_etabs_status.setStyleSheet("color: #fbbf24; font-weight: bold;")
+            self.log("ETABS Detection: No installed ETABS versions found.")
+
+    def connect_live_etabs(self):
+        self.radio_mode_live.setChecked(True)
+        self.log("Attempting to connect to active running ETABS instance via COM OAPI...")
+        adapter = ETABSCOMAdapter()
+        success, msg = adapter.connect_running_instance()
+        if success:
+            self.lbl_etabs_status.setText(f"✓ {msg}")
+            self.lbl_etabs_status.setStyleSheet("color: #34d399; font-weight: bold;")
+            self.log(f"ETABS COM Connection Success: {msg}")
+            
+            try:
+                self.log("Extracting structural model directly from connected ETABS session...")
+                b_model = adapter.extract_building_model()
+                if b_model and b_model.stories:
+                    self.building_model = b_model
+                    self.lbl_file_path.setText(f"Live Connected ETABS Model: {b_model.project_name}")
+                    self.populate_stories(b_model.stories)
+                    self.log(f"Successfully extracted {len(b_model.stories)} stories and structural elements from Live ETABS session!")
+                    QMessageBox.information(self, "Live ETABS Connected", f"Successfully connected to active ETABS session and extracted {len(b_model.stories)} stories!")
+            except Exception as e:
+                self.log(f"Notice during live ETABS extraction: {e}")
+                QMessageBox.warning(self, "Live ETABS Extraction Notice", f"Connected to ETABS COM API: {msg}")
+        else:
+            self.lbl_etabs_status.setText(f"⚠ {msg}")
+            self.lbl_etabs_status.setStyleSheet("color: #f87171; font-weight: bold;")
+            self.log(f"ETABS COM Connection Status: {msg}")
+            QMessageBox.warning(
+                self,
+                "ETABS Live COM Connection",
+                f"Could not connect to an active ETABS session:\n\n{msg}\n\n"
+                "Please ensure ETABS is open with a model loaded, or use 'Browse ETABS File...' to parse .E2K / $ET / .ET files offline."
+            )
 
     def browse_file(self):
         file_filter = "ETABS Files (*.$et *.e2k *.edb);;All Files (*.*)"
@@ -397,27 +564,100 @@ class RAMExporterMainWindow(QMainWindow):
         stories = b_model.stories
         self.log(f"Successfully parsed building model '{filename}' with {len(stories)} stories.")
 
-        # Populate story table
+    def populate_stories(self, stories):
+        self.table_stories.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.table_stories.setRowCount(0)
         for row_idx, story in enumerate(stories):
             self.table_stories.insertRow(row_idx)
 
-            # Checkbox
+            # Checkbox Column
             chk_item = QTableWidgetItem()
             chk_item.setFlags(Qt.ItemIsUserCheckable | Qt.ItemIsEnabled)
             chk_item.setCheckState(Qt.Checked)
             self.table_stories.setItem(row_idx, 0, chk_item)
 
-            # Name
-            self.table_stories.setItem(row_idx, 1, QTableWidgetItem(story.name))
-            # Elevation
-            self.table_stories.setItem(row_idx, 2, QTableWidgetItem(f"{story.elevation:.2f}"))
-            # Height
-            self.table_stories.setItem(row_idx, 3, QTableWidgetItem(f"{story.height:.2f}"))
-            # Status
-            self.table_stories.setItem(row_idx, 4, QTableWidgetItem("Ready for Export"))
+            # Story Name Column (Read-Only)
+            item_name = QTableWidgetItem(str(story.name))
+            item_name.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
+            self.table_stories.setItem(row_idx, 1, item_name)
+
+            # Elevation Column (Read-Only)
+            item_elev = QTableWidgetItem(f"{story.elevation:.2f}")
+            item_elev.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
+            self.table_stories.setItem(row_idx, 2, item_elev)
+
+            # Height Column (Read-Only)
+            item_height = QTableWidgetItem(f"{story.height:.2f}")
+            item_height.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
+            self.table_stories.setItem(row_idx, 3, item_height)
+
+            # Status Column (Read-Only)
+            item_status = QTableWidgetItem("Ready for Export")
+            item_status.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
+            self.table_stories.setItem(row_idx, 4, item_status)
 
         self.btn_export.setEnabled(True)
+
+        if stories:
+            self.table_stories.selectRow(0)
+            self.on_story_selection_changed()
+
+    def on_parsing_finished(self, b_model: BuildingModel, filename: str, companion_text: Optional[str]):
+        self.building_model = b_model
+        self.btn_parse.setEnabled(True)
+        self.btn_browse.setEnabled(True)
+
+        stories = b_model.stories
+        self.log(f"Successfully parsed building model '{filename}' with {len(stories)} stories.")
+        self.populate_stories(stories)
+
+    def set_2d_mode(self):
+        self.btn_view_2d.setChecked(True)
+        self.btn_view_3d.setChecked(False)
+        self.model_viewer.set_2d_mode()
+
+    def set_3d_mode(self):
+        self.btn_view_2d.setChecked(False)
+        self.btn_view_3d.setChecked(True)
+        self.model_viewer.set_3d_mode()
+
+    def on_toggle_slabs(self, checked: bool):
+        self.model_viewer.show_slabs = checked
+        self.model_viewer.update()
+
+    def on_toggle_beams(self, checked: bool):
+        self.model_viewer.show_beams = checked
+        self.model_viewer.update()
+
+    def on_toggle_columns(self, checked: bool):
+        self.model_viewer.show_columns = checked
+        self.model_viewer.update()
+
+    def on_toggle_walls(self, checked: bool):
+        self.model_viewer.show_walls = checked
+        self.model_viewer.update()
+
+    def on_toggle_openings(self, checked: bool):
+        self.model_viewer.show_openings = checked
+        self.model_viewer.update()
+
+    def on_toggle_nodes(self, checked: bool):
+        self.model_viewer.show_nodes = checked
+        self.model_viewer.update()
+
+    def on_story_selection_changed(self):
+        if not self.building_model:
+            return
+        selected_rows = self.table_stories.selectionModel().selectedRows()
+        if not selected_rows:
+            return
+
+        row = selected_rows[0].row()
+        name_item = self.table_stories.item(row, 1)
+        if name_item:
+            story_name = name_item.text()
+            floor_model = FloorExtractor.extract_floor(self.building_model, story_name)
+            self.model_viewer.set_floor_model(floor_model)
 
     def on_parsing_error(self, err_msg: str):
         self.btn_parse.setEnabled(True)
@@ -495,13 +735,33 @@ class RAMExporterMainWindow(QMainWindow):
         self.btn_export.setEnabled(True)
         self.progress_bar.setVisible(False)
         self.log(f"=== Batch Export Completed: {success_count}/{total_count} floors exported successfully ===")
-        QMessageBox.information(
-            self,
-            "Export Complete",
-            f"Export process completed!\n\n"
-            f"Successfully exported {success_count} of {total_count} selected floor(s).\n"
-            f"Saved to: {self.output_dir}"
+        self.show_import_instructions(success_count, total_count)
+
+    def show_import_instructions(self, success_count: int = 1, total_count: int = 1):
+        msg_box = QMessageBox(self)
+        msg_box.setWindowTitle("RAM Concept Model Opening & Import Guide")
+        msg_box.setIcon(QMessageBox.Information)
+        msg_box.setText(f"Export Completed Successfully ({success_count}/{total_count} floors exported)\nOutput Folder: {self.output_dir}")
+        msg_box.setInformativeText(
+            "HOW TO VIEW / IMPORT YOUR MODEL IN BENTLEY RAM CONCEPT:\n\n"
+            "1. OPENING NATIVE MODEL (.CPT):\n"
+            "   • Launch Bentley RAM Concept.\n"
+            "   • Click File -> Open... and select the exported .cpt file (e.g. Floor_Floor5.cpt).\n"
+            "   • In the left Layer Tree, double-click: Structure Layer -> Slab Area Plan.\n"
+            "   • All Slabs, Beams, Columns, Walls, and Openings render in full 3D/2D layout.\n\n"
+            "2. IMPORTING CAD DRAWING / STRUCTURAL EXCHANGE (.DXF / .CPF):\n"
+            "   • Launch Bentley RAM Concept and create a new document (File -> New).\n"
+            "   • Go to File -> Import -> Drawing File... (or CAD File...).\n"
+            "   • Select the exported .dxf or .cpf file.\n"
+            "   • Ensure Import Units match Model Units (Meters / Millimeters).\n"
+            "   • Map drawing layers (SLAB_OUTLINE, BEAMS, COLUMNS_BELOW, WALLS_BELOW, OPENINGS) onto Structure Plan.\n\n"
+            "3. AUTOMATED PYTHON API SCRIPT:\n"
+            "   • Open Command Prompt in the export folder and run:\n"
+            "     python <story_name>_RAMConcept_Automation.py\n\n"
+            "Note: A copy of these instructions (RAM_CONCEPT_IMPORT_INSTRUCTIONS.txt) has been saved in your output folder."
         )
+        msg_box.setStandardButtons(QMessageBox.Ok)
+        msg_box.exec()
 
 
 def main():

@@ -20,42 +20,35 @@ class FloorExtractor:
         # 1. Locate story
         target_story: Optional[Story] = None
         for st in model.stories:
-            if st.name.lower() == story_name.lower():
+            if st.name.lower().strip() == story_name.lower().strip():
                 target_story = st
                 break
 
         if not target_story:
-            # Fallback mock story if not found directly
             target_story = Story(id=f"story_{story_name}", name=story_name, elevation=0.0, height=3.0)
 
         story_elev = target_story.elevation
-        elev_tol = 0.5  # meters
+        story_height = target_story.height if target_story.height > 0 else 3.5
+        elev_tol = 0.35  # meters tolerance for story floor level
+
         s_name_clean = story_name.strip().lower().replace(" ", "").replace("_", "").replace("-", "")
 
-        # Helper for matching story string tokens
+        # Strict exact story match helper
         def is_story_match(val: Optional[str]) -> bool:
             if not val:
                 return False
             clean_val = val.strip().lower().replace(" ", "").replace("_", "").replace("-", "")
-            return clean_val == s_name_clean or s_name_clean in clean_val or clean_val in s_name_clean
+            return clean_val == s_name_clean
 
         # 2. Extract Slabs & Openings for story
         slabs: List[Slab] = []
         openings: List[Slab] = []
         for sl in model.slabs:
-            if is_story_match(sl.story) or abs(sl.elevation - story_elev) < elev_tol or (sl.story and sl.story.lower() == story_name.lower()):
+            if is_story_match(sl.story) or abs(sl.elevation - story_elev) < elev_tol:
                 if sl.is_opening:
                     openings.append(sl)
                 else:
                     slabs.append(sl)
-
-        # Fallback if no slabs matched story name/elevation directly
-        if not slabs and model.slabs:
-            target_idx = next((i for i, st in enumerate(model.stories) if is_story_match(st.name)), 0)
-            if target_idx < len(model.slabs):
-                slabs.append(model.slabs[target_idx])
-            else:
-                slabs.append(model.slabs[0])
 
         # 3. Extract Beams (Frame elements lying on story floor level)
         beams: List[Frame] = []
@@ -75,7 +68,7 @@ class FloorExtractor:
                 area_loads=[al for al in model.area_loads if is_story_match(al.story)]
             )
 
-        # 5. Extract Columns Above and Below
+        # 5. Extract Columns Above and Below with exact elevation bounds
         columns_above: List[Frame] = []
         columns_below: List[Frame] = []
 
@@ -84,35 +77,39 @@ class FloorExtractor:
                 min_z = min(fr.start_point.z, fr.end_point.z)
                 max_z = max(fr.start_point.z, fr.end_point.z)
 
-                if abs(max_z - story_elev) < 0.8 or is_story_match(fr.story):
+                # Column Below: top node connects to floor elevation (story_elev)
+                if abs(max_z - story_elev) < elev_tol:
                     columns_below.append(fr)
-                elif abs(min_z - story_elev) < 0.8:
+                # Column Above: bottom node connects to floor elevation (story_elev)
+                elif abs(min_z - story_elev) < elev_tol:
                     columns_above.append(fr)
-                elif min_z < story_elev < max_z:
+                # Column Spanning across floor elevation
+                elif min_z + 0.1 < story_elev < max_z - 0.1:
+                    columns_below.append(fr)
+                elif is_story_match(fr.story):
                     columns_below.append(fr)
 
-        # 6. Extract Walls Above and Below
+        # 6. Extract Walls Above and Below with exact elevation bounds
         walls_above: List[Wall] = []
         walls_below: List[Wall] = []
         for w in model.walls:
             min_z = min(w.top_z, w.bottom_z)
             max_z = max(w.top_z, w.bottom_z)
 
-            if abs(max_z - story_elev) < 0.8 or is_story_match(w.story):
+            if abs(max_z - story_elev) < elev_tol:
                 walls_below.append(w)
-            elif abs(min_z - story_elev) < 0.8:
+            elif abs(min_z - story_elev) < elev_tol:
                 walls_above.append(w)
-            elif min_z < story_elev < max_z:
+            elif min_z + 0.1 < story_elev < max_z - 0.1:
+                walls_below.append(w)
+            elif is_story_match(w.story):
                 walls_below.append(w)
 
-        # 7. Extract Nodes on floor level
+        # 7. Extract Nodes on story floor level
         floor_nodes: List[Node] = []
         for nd in model.nodes.values():
-            if abs(nd.z - story_elev) < 0.8 or is_story_match(nd.story):
+            if abs(nd.z - story_elev) < elev_tol or is_story_match(nd.story):
                 floor_nodes.append(nd)
-
-        if not floor_nodes and model.nodes:
-            floor_nodes = list(model.nodes.values())
 
         # 8. Filter Loads for story
         area_loads = [al for al in model.area_loads if is_story_match(al.story)]

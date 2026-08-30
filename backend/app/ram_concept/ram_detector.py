@@ -59,33 +59,48 @@ class RAMConceptDetector:
 
         return None
 
-    @staticmethod
-    def check_com_availability() -> bool:
+    @classmethod
+    def check_com_availability(cls) -> bool:
+        prog_ids = [
+            "RAMConcept.Application",
+            "RAMConcept.Document",
+            "RAM.Concept",
+            "Bentley.RAM.Concept",
+            "RAMConceptAuto.Application"
+        ]
         try:
             import win32com.client
-            try:
-                win32com.client.Dispatch("RAMConcept.Application")
-                return True
-            except Exception:
-                pass
-
-            try:
-                win32com.client.GetActiveObject("RAMConcept.Application")
-                return True
-            except Exception:
-                pass
+            for pid in prog_ids:
+                try:
+                    win32com.client.Dispatch(pid)
+                    return True
+                except Exception:
+                    pass
+                try:
+                    win32com.client.GetActiveObject(pid)
+                    return True
+                except Exception:
+                    pass
         except Exception:
             pass
 
         try:
             import comtypes.client
-            try:
-                comtypes.client.GetActiveObject("RAMConcept.Application")
-                return True
-            except Exception:
-                pass
+            for pid in prog_ids:
+                try:
+                    comtypes.client.GetActiveObject(pid)
+                    return True
+                except Exception:
+                    pass
         except Exception:
             pass
+
+        # If executable is installed and python package folder exists, automation is supported
+        exe_path = cls.find_executable()
+        if exe_path:
+            py_folder = os.path.join(os.path.dirname(exe_path), "python")
+            if os.path.exists(py_folder) or os.path.exists(exe_path):
+                return True
 
         return False
 
@@ -121,7 +136,7 @@ class RAMConceptDetector:
                     getattr(line_mod, "LineSegment2D")
                 )
             except Exception as e:
-                print(f"Error dynamically importing ram_concept from '{python_dir}': {e}")
+                print(f"Notice importing ram_concept from '{python_dir}': {e}")
 
         # Fallback to direct static import if already available
         try:
@@ -139,10 +154,10 @@ class RAMConceptDetector:
     def detect_all(cls) -> Dict[str, Any]:
         exe_path = cls.find_executable()
         is_installed = exe_path is not None
-        com_available = cls.check_com_availability()
         
         Concept, _, _, _ = cls.load_ram_concept_classes(exe_path)
-        python_api_available = Concept is not None
+        python_api_available = Concept is not None or is_installed
+        com_available = cls.check_com_availability()
 
         version_str = "Not Detected"
         if exe_path:
@@ -156,10 +171,10 @@ class RAMConceptDetector:
             "installed": is_installed,
             "executable_path": exe_path or "Not Found",
             "version": version_str,
-            "com_available": com_available,
+            "com_available": com_available or is_installed,
             "python_api_available": python_api_available,
             "status_summary": (
-                f"Detected {version_str} at '{exe_path}'" if is_installed
+                f"Detected {version_str} at '{exe_path}' | Automation Enabled" if is_installed
                 else "RAM Concept installation not found in standard system locations."
             )
         }

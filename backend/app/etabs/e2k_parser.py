@@ -1,3 +1,4 @@
+import os
 import re
 from typing import Dict, List, Optional
 from app.models.intermediate import (
@@ -119,129 +120,68 @@ class E2KParser:
             except Exception:
                 pass
 
-        # 4. Extract story tokens from raw text streams (unquoted and quoted)
-        unique_stories = []
-        for text in decoded_texts:
-            # Matches STORY "Story1", STORY Story1, Story 1, Story1, Level 1, etc.
-            matches = re.findall(r'(?:STORY\s+"?([A-Za-z0-9_ -]{1,32})"?|\b(Story\s*\d+|Level\s*\d+|Floor\s*\d+|Base|Plinth|Roof|L\d{1,2}|B\d{1,2})\b)', text, re.IGNORECASE)
-            for m in matches:
-                sname = m[0] if m[0] else m[1]
-                sname = sname.strip().strip('"').strip("'")
-                if sname and len(sname) > 1 and sname not in unique_stories:
-                    # Ignore keyword noise
-                    if sname.upper() not in ("STORIES", "SEQUENCE", "DEFINITION", "DATA", "TABLE", "ELEVATION"):
-                        unique_stories.append(sname)
+        # 4. If binary EDB has no embedded text tables, attempt Live ETABS COM API connection if ETABS is open
+        try:
+            from backend.app.etabs.com_adapter import ETABSCOMAdapter
+            adapter = ETABSCOMAdapter()
+            success, msg = adapter.connect_running_instance()
+            if success:
+                live_model = adapter.extract_building_model()
+                if live_model and live_model.stories and (live_model.slabs or live_model.frames):
+                    live_model.project_name = filename
+                    return live_model
+        except Exception:
+            pass
 
-        if unique_stories:
-            model = BuildingModel(project_name=filename)
-            for idx, sname in enumerate(unique_stories):
-                model.stories.append(Story(
-                    id=f"story_{sname.lower().replace(' ', '_')}",
-                    name=sname,
-                    elevation=round((idx + 1) * 3.5, 2),
-                    height=3.5,
-                    is_master=False
-                ))
-            
-            # Generate representative floor geometry (nodes, slab boundaries, columns, beams) per story
-            for s in model.stories:
-                elev = s.elevation
-                # 4 boundary nodes for floor slab
-                n1 = Node(id=f"{s.id}_n1", x=0.0, y=0.0, z=elev, story=s.name)
-                n2 = Node(id=f"{s.id}_n2", x=20.0, y=0.0, z=elev, story=s.name)
-                n3 = Node(id=f"{s.id}_n3", x=20.0, y=15.0, z=elev, story=s.name)
-                n4 = Node(id=f"{s.id}_n4", x=0.0, y=15.0, z=elev, story=s.name)
-                for n in (n1, n2, n3, n4):
-                    model.nodes[n.id] = n
-
-                # Slab polygon
-                slab = Slab(
-                    id=f"{s.id}_slab1",
-                    story=s.name,
-                    property_name="Slab250",
-                    thickness=0.25,
-                    polygon=[Point2D(x=0.0, y=0.0), Point2D(x=20.0, y=0.0), Point2D(x=20.0, y=15.0), Point2D(x=0.0, y=15.0)]
-                )
-                model.slabs.append(slab)
-
-                # Beams along slab perimeter
-                p1 = Point3D(x=0.0, y=0.0, z=elev)
-                p2 = Point3D(x=20.0, y=0.0, z=elev)
-                p3 = Point3D(x=20.0, y=15.0, z=elev)
-                p4 = Point3D(x=0.0, y=15.0, z=elev)
-
-                b1 = Frame(id=f"{s.id}_b1", story=s.name, type=FrameType.BEAM, section="B300x600", start_node=f"{s.id}_n1", end_node=f"{s.id}_n2", start_point=p1, end_point=p2)
-                b2 = Frame(id=f"{s.id}_b2", story=s.name, type=FrameType.BEAM, section="B300x600", start_node=f"{s.id}_n2", end_node=f"{s.id}_n3", start_point=p2, end_point=p3)
-                b3 = Frame(id=f"{s.id}_b3", story=s.name, type=FrameType.BEAM, section="B300x600", start_node=f"{s.id}_n3", end_node=f"{s.id}_n4", start_point=p3, end_point=p4)
-                b4 = Frame(id=f"{s.id}_b4", story=s.name, type=FrameType.BEAM, section="B300x600", start_node=f"{s.id}_n4", end_node=f"{s.id}_n1", start_point=p4, end_point=p1)
-                model.frames.extend([b1, b2, b3, b4])
-
-                # Columns below floor corner nodes
-                c1 = Frame(id=f"{s.id}_c1", story=s.name, type=FrameType.COLUMN, section="C600x600", start_node=f"{s.id}_c1_b", end_node=f"{s.id}_n1", start_point=Point3D(x=0.0, y=0.0, z=elev-3.5), end_point=p1)
-                c2 = Frame(id=f"{s.id}_c2", story=s.name, type=FrameType.COLUMN, section="C600x600", start_node=f"{s.id}_c2_b", end_node=f"{s.id}_n2", start_point=Point3D(x=20.0, y=0.0, z=elev-3.5), end_point=p2)
-                c3 = Frame(id=f"{s.id}_c3", story=s.name, type=FrameType.COLUMN, section="C600x600", start_node=f"{s.id}_c3_b", end_node=f"{s.id}_n3", start_point=Point3D(x=20.0, y=15.0, z=elev-3.5), end_point=p3)
-                c4 = Frame(id=f"{s.id}_c4", story=s.name, type=FrameType.COLUMN, section="C600x600", start_node=f"{s.id}_c4_b", end_node=f"{s.id}_n4", start_point=Point3D(x=0.0, y=15.0, z=elev-3.5), end_point=p4)
-                model.frames.extend([c1, c2, c3, c4])
-
-            parser = E2KParser(model)
-            parser._post_process()
-            return model
-
-        # 5. Robust In-Tool Fallback Building Model for proprietary binary .EDB files
-        # Constructs complete structural story hierarchy & floor layout from file metadata so processing completes successfully
-        model = BuildingModel(project_name=filename)
-        default_story_names = ["Base", "Story 1", "Story 2", "Story 3", "Story 4", "Roof"]
-        for idx, sname in enumerate(default_story_names):
-            elev = round(idx * 3.5, 2)
-            s_id = f"story_{sname.lower().replace(' ', '_')}"
-            model.stories.append(Story(
-                id=s_id,
-                name=sname,
-                elevation=elev,
-                height=3.5 if idx > 0 else 0.0,
-                is_master=(sname == "Story 3")
-            ))
-            if idx > 0:
-                n1 = Node(id=f"{s_id}_n1", x=0.0, y=0.0, z=elev, story=sname)
-                n2 = Node(id=f"{s_id}_n2", x=24.0, y=0.0, z=elev, story=sname)
-                n3 = Node(id=f"{s_id}_n3", x=24.0, y=18.0, z=elev, story=sname)
-                n4 = Node(id=f"{s_id}_n4", x=0.0, y=18.0, z=elev, story=sname)
-                for n in (n1, n2, n3, n4):
-                    model.nodes[n.id] = n
-
-                slab = Slab(
-                    id=f"{s_id}_slab1",
-                    story=sname,
-                    property_name="Slab250",
-                    thickness=0.25,
-                    polygon=[Point2D(x=0.0, y=0.0), Point2D(x=24.0, y=0.0), Point2D(x=24.0, y=18.0), Point2D(x=0.0, y=18.0)]
-                )
-                model.slabs.append(slab)
-
-                p1 = Point3D(x=0.0, y=0.0, z=elev)
-                p2 = Point3D(x=24.0, y=0.0, z=elev)
-                p3 = Point3D(x=24.0, y=18.0, z=elev)
-                p4 = Point3D(x=0.0, y=18.0, z=elev)
-
-                b1 = Frame(id=f"{s_id}_b1", story=sname, type=FrameType.BEAM, section="B400x700", start_node=f"{s_id}_n1", end_node=f"{s_id}_n2", start_point=p1, end_point=p2)
-                b2 = Frame(id=f"{s_id}_b2", story=sname, type=FrameType.BEAM, section="B400x700", start_node=f"{s_id}_n2", end_node=f"{s_id}_n3", start_point=p2, end_point=p3)
-                b3 = Frame(id=f"{s_id}_b3", story=sname, type=FrameType.BEAM, section="B400x700", start_node=f"{s_id}_n3", end_node=f"{s_id}_n4", start_point=p3, end_point=p4)
-                b4 = Frame(id=f"{s_id}_b4", story=sname, type=FrameType.BEAM, section="B400x700", start_node=f"{s_id}_n4", end_node=f"{s_id}_n1", start_point=p4, end_point=p1)
-                model.frames.extend([b1, b2, b3, b4])
-
-                c1 = Frame(id=f"{s_id}_c1", story=sname, type=FrameType.COLUMN, section="C700x700", start_node=f"{s_id}_c1_b", end_node=f"{s_id}_n1", start_point=Point3D(x=0.0, y=0.0, z=elev-3.5), end_point=p1)
-                c2 = Frame(id=f"{s_id}_c2", story=sname, type=FrameType.COLUMN, section="C700x700", start_node=f"{s_id}_c2_b", end_node=f"{s_id}_n2", start_point=Point3D(x=24.0, y=0.0, z=elev-3.5), end_point=p2)
-                c3 = Frame(id=f"{s_id}_c3", story=sname, type=FrameType.COLUMN, section="C700x700", start_node=f"{s_id}_c3_b", end_node=f"{s_id}_n3", start_point=Point3D(x=24.0, y=18.0, z=elev-3.5), end_point=p3)
-                c4 = Frame(id=f"{s_id}_c4", story=sname, type=FrameType.COLUMN, section="C700x700", start_node=f"{s_id}_c4_b", end_node=f"{s_id}_n4", start_point=Point3D(x=0.0, y=18.0, z=elev-3.5), end_point=p4)
-                model.frames.extend([c1, c2, c3, c4])
-
-        return model
+        # 5. If no embedded text table section and no active ETABS COM session, raise informative error
+        raise ValueError(
+            f"Selected file '{filename}' is an ETABS binary database (.EDB).\n\n"
+            "To import 100% exact real structural geometry into RAM Concept:\n"
+            "1. If ETABS is currently open with your model, click '🔌 Connect to Active ETABS' in the application.\n"
+            "2. Or in ETABS, go to File -> Export -> ETABS .e2k Text File..., and open the exported .e2k file."
+        )
 
     @staticmethod
     def detect_edb_version(raw_bytes: bytes) -> Optional[str]:
         """Return the version field from the EDB file header or binary stream when present."""
         text = raw_bytes[:512].decode("ascii", errors="ignore")
         versions = re.findall(r"\b\d{1,2}(?:\.\d+){1,3}\b", text)
+        return versions[0] if versions else None
+        
+    def parse_file(self, file_path: str) -> BuildingModel:
+        ext = os.path.splitext(file_path)[1].lower()
+        if ext == ".edb":
+            # Auto-check for companion .e2k / .$et text export in same folder
+            base_no_ext = os.path.splitext(file_path)[0]
+            dir_path = os.path.dirname(file_path)
+            companion_candidates = [
+                base_no_ext + ".e2k",
+                base_no_ext + ".$et",
+                base_no_ext + ".s2k",
+                base_no_ext + ".E2K",
+                base_no_ext + ".ED",
+                os.path.join(dir_path, "model.e2k"),
+                os.path.join(dir_path, "model.$et"),
+            ]
+            for cand in companion_candidates:
+                if os.path.exists(cand):
+                    with open(cand, "r", encoding="utf-8", errors="ignore") as f:
+                        content = f.read()
+                    model = self.parse_string(content)
+                    model.project_name = os.path.basename(file_path)
+                    return model
+
+            with open(file_path, "rb") as f:
+                raw_bytes = f.read()
+            model = self.parse_binary_edb_bytes(raw_bytes, filename=os.path.basename(file_path))
+            model.project_name = os.path.basename(file_path)
+            return model
+        with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
+            content = f.read()
+        model = self.parse_string(content)
+        model.project_name = os.path.basename(file_path)
+        return model
+
     def parse_string(self, content: str) -> BuildingModel:
         lines = content.splitlines()
         current_section = None

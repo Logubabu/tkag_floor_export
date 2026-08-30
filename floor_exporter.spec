@@ -33,6 +33,7 @@ hiddenimports = [
     'backend.app.ram_concept.exporter',
     'backend.app.ram_concept.ram_detector',
     'gui.app_gui',
+    'gui.model_viewer',
 ]
 
 excludes = [
