@@ -235,6 +235,7 @@ class RAMExporterMainWindow(QMainWindow):
         self.table_stories.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.table_stories.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.table_stories.itemSelectionChanged.connect(self.on_story_selection_changed)
+        self.table_stories.itemClicked.connect(self.on_story_table_item_clicked)
         story_layout.addWidget(self.table_stories)
 
         splitter.addWidget(story_box)
@@ -272,8 +273,9 @@ class RAMExporterMainWindow(QMainWindow):
         self.chk_layer_walls = QCheckBox("Walls")
         self.chk_layer_openings = QCheckBox("Openings")
         self.chk_layer_nodes = QCheckBox("Nodes")
+        self.chk_layer_labels = QCheckBox("Show/Hide Names")
 
-        for chk in [self.chk_layer_slabs, self.chk_layer_beams, self.chk_layer_columns, self.chk_layer_walls, self.chk_layer_openings, self.chk_layer_nodes]:
+        for chk in [self.chk_layer_slabs, self.chk_layer_beams, self.chk_layer_columns, self.chk_layer_walls, self.chk_layer_openings, self.chk_layer_nodes, self.chk_layer_labels]:
             chk.setChecked(True)
             layer_tools.addWidget(chk)
 
@@ -283,6 +285,7 @@ class RAMExporterMainWindow(QMainWindow):
         self.chk_layer_walls.toggled.connect(self.on_toggle_walls)
         self.chk_layer_openings.toggled.connect(self.on_toggle_openings)
         self.chk_layer_nodes.toggled.connect(self.on_toggle_nodes)
+        self.chk_layer_labels.toggled.connect(self.on_toggle_labels)
 
         layer_tools.addStretch()
         viewer_layout.addLayout(layer_tools)
@@ -645,6 +648,10 @@ class RAMExporterMainWindow(QMainWindow):
         self.model_viewer.show_nodes = checked
         self.model_viewer.update()
 
+    def on_toggle_labels(self, checked: bool):
+        self.model_viewer.show_labels = checked
+        self.model_viewer.update()
+
     def on_story_selection_changed(self):
         if not self.building_model:
             return
@@ -656,8 +663,22 @@ class RAMExporterMainWindow(QMainWindow):
         name_item = self.table_stories.item(row, 1)
         if name_item:
             story_name = name_item.text()
+            # Extract single selected floor model exclusively
             floor_model = FloorExtractor.extract_floor(self.building_model, story_name)
             self.model_viewer.set_floor_model(floor_model)
+            self.log(f"Displaying extracted floor geometry for selected story: '{story_name}'")
+
+    def on_story_table_item_clicked(self, item: QTableWidgetItem):
+        if not self.building_model or not item:
+            return
+        row = item.row()
+        name_item = self.table_stories.item(row, 1)
+        if name_item:
+            story_name = name_item.text()
+            # Extract single selected floor model exclusively
+            floor_model = FloorExtractor.extract_floor(self.building_model, story_name)
+            self.model_viewer.set_floor_model(floor_model)
+            self.log(f"Displaying extracted floor geometry for clicked story: '{story_name}'")
 
     def on_parsing_error(self, err_msg: str):
         self.btn_parse.setEnabled(True)

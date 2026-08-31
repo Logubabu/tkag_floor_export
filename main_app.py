@@ -1,5 +1,9 @@
 import sys
 import os
+import multiprocessing
+
+# Crucial for PyInstaller frozen executable: prevents spawning multiple instances/windows
+multiprocessing.freeze_support()
 
 # Add root directory and backend directory to sys.path
 root_dir = os.path.dirname(os.path.abspath(__file__))

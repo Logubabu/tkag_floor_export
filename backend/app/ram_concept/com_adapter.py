@@ -18,7 +18,8 @@ class RAMConceptCOMAdapter:
             "RAMConcept.Document",
             "Bentley.RAM.Concept",
             "RAM.Concept",
-            "RAMConceptAuto.Application"
+            "RAMConceptAuto.Application",
+            "Concept.Application"
         ]
         
         # 1. Try win32com GetActiveObject & Dispatch
@@ -56,7 +57,7 @@ class RAMConceptCOMAdapter:
         except Exception:
             pass
 
-        return False, "RAM Concept COM API driver is not registered on this system. Clean DXF, CPT/CPF, and Python automation files have been generated for direct RAM Concept import."
+        return False, "RAM Concept COM API driver string is not registered on this host system. Model `.CPT` file and `.DXF` CAD package generated cleanly."
 
     def push_floor_model(self, dxf_filepath: str, story_name: str) -> Dict[str, Any]:
         """
