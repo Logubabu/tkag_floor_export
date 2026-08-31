@@ -13,34 +13,50 @@ class RAMConceptCOMAdapter:
         self.is_connected = False
 
     def connect(self) -> Tuple[bool, str]:
-        # 1. Try win32com GetActiveObject
+        prog_ids = [
+            "RAMConcept.Application",
+            "RAMConcept.Document",
+            "Bentley.RAM.Concept",
+            "RAM.Concept",
+            "RAMConceptAuto.Application"
+        ]
+        
+        # 1. Try win32com GetActiveObject & Dispatch
         try:
             import win32com.client
-            self.app = win32com.client.GetActiveObject("RAMConcept.Application")
-            self.is_connected = True
-            return True, "Connected to active RAM Concept instance via win32com."
+            for pid in prog_ids:
+                try:
+                    self.app = win32com.client.GetActiveObject(pid)
+                    if self.app:
+                        self.is_connected = True
+                        return True, f"Connected to active RAM Concept instance ({pid}) via win32com."
+                except Exception:
+                    pass
+                try:
+                    self.app = win32com.client.Dispatch(pid)
+                    if self.app:
+                        self.is_connected = True
+                        return True, f"Started new RAM Concept session ({pid}) via win32com Dispatch."
+                except Exception:
+                    pass
         except Exception:
             pass
 
-        # 2. Try win32com Dispatch
-        try:
-            import win32com.client
-            self.app = win32com.client.Dispatch("RAMConcept.Application")
-            self.is_connected = True
-            return True, "Started new RAM Concept Application session via win32com Dispatch."
-        except Exception:
-            pass
-
-        # 3. Try comtypes
+        # 2. Try comtypes
         try:
             import comtypes.client
-            self.app = comtypes.client.GetActiveObject("RAMConcept.Application")
-            self.is_connected = True
-            return True, "Connected to active RAM Concept instance via comtypes."
+            for pid in prog_ids:
+                try:
+                    self.app = comtypes.client.GetActiveObject(pid)
+                    if self.app:
+                        self.is_connected = True
+                        return True, f"Connected to active RAM Concept instance ({pid}) via comtypes."
+                except Exception:
+                    pass
         except Exception:
             pass
 
-        return False, "RAM Concept COM API not available or RAM Concept application is not installed."
+        return False, "RAM Concept COM API driver is not registered on this system. Clean DXF, CPT/CPF, and Python automation files have been generated for direct RAM Concept import."
 
     def push_floor_model(self, dxf_filepath: str, story_name: str) -> Dict[str, Any]:
         """

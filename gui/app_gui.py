@@ -107,9 +107,9 @@ class ExportThread(QThread):
 
                 if cpt_path and os.path.exists(cpt_path) and os.path.getsize(cpt_path) > 0:
                     size_mb = os.path.getsize(cpt_path) / (1024 * 1024)
-                    self.progress_signal.emit(f"✓ Native .CPT / .CPF model generated for {story_name} ({size_mb:.2f} MB) in '{floor_folder}'")
+                    self.progress_signal.emit(f"✓ Native .CPT model generated for {story_name} ({size_mb:.2f} MB) in '{floor_folder}'")
                 else:
-                    self.progress_signal.emit(f"✓ DXF exchange model & Python automation macro generated for {story_name} in '{floor_folder}'")
+                    self.progress_signal.emit(f"✓ DXF exchange model generated for {story_name} in '{floor_folder}'")
                 
                 self.item_complete_signal.emit(story_name, cpt_path if cpt_path and os.path.exists(cpt_path) and os.path.getsize(cpt_path) > 0 else "")
                 success_count += 1
@@ -299,15 +299,15 @@ class RAMExporterMainWindow(QMainWindow):
         export_opts_box = QGroupBox("3. RAM Concept Export Settings")
         opts_layout = QVBoxLayout(export_opts_box)
 
-        # Format Checkboxes (.CPT/.CPF and .DXF only per user requirement)
-        self.chk_cpt = QCheckBox("Bentley RAM Concept Model File (.CPT / .CPF)")
+        # Format Checkboxes (.CPT and .DXF only per user requirement)
+        self.chk_cpt = QCheckBox("Bentley RAM Concept Model File (.CPT)")
         self.chk_cpt.setChecked(True)
         self.chk_dxf = QCheckBox("CAD Structural Exchange Drawing (.DXF)")
         self.chk_dxf.setChecked(True)
-        self.chk_py = QCheckBox("Python RAM Concept COM Macro Script (.PY)")
+        self.chk_py = QCheckBox("Python Automation Macro (.PY)")
         self.chk_py.setChecked(False)
         self.chk_py.setVisible(False)
-        self.chk_json = QCheckBox("Intermediate Structural Model Schema (.JSON)")
+        self.chk_json = QCheckBox("Structural Schema (.JSON)")
         self.chk_json.setChecked(False)
         self.chk_json.setVisible(False)
 

@@ -77,6 +77,8 @@ class ModelViewerWidget(QWidget):
             for col in self.floor_model.columns_above + self.floor_model.columns_below:
                 points_to_check.extend([col.start_point, col.end_point])
             for wall in self.floor_model.walls_above + self.floor_model.walls_below:
+                if hasattr(wall, 'polygon') and wall.polygon:
+                    points_to_check.extend(wall.polygon)
                 sp = getattr(wall, 'start_point', None)
                 ep = getattr(wall, 'end_point', None)
                 if sp and ep:
@@ -107,10 +109,10 @@ class ModelViewerWidget(QWidget):
         if self.is_3d_mode:
             rad_yaw = math.radians(self.yaw_deg)
             rad_pitch = math.radians(self.pitch_deg)
-            rx = cx * math.cos(rad_yaw) - cy * math.sin(rad_yaw)
-            ry = cx * math.sin(rad_yaw) + cy * math.cos(rad_yaw)
+            rx = cx * math.cos(rad_yaw) + cy * math.sin(rad_yaw)
+            ry = cx * math.sin(rad_yaw) - cy * math.cos(rad_yaw)
             iso_cx = rx
-            iso_cy = ry * math.sin(rad_pitch)
+            iso_cy = (self.floor_model.story.elevation if self.floor_model and self.floor_model.story else 0.0) * math.cos(rad_pitch) - ry * math.sin(rad_pitch)
             self.pan_offset = QPointF(
                 canvas_w / 2.0 - iso_cx * self.zoom_factor,
                 canvas_h / 2.0 + iso_cy * self.zoom_factor
@@ -156,10 +158,16 @@ class ModelViewerWidget(QWidget):
         if self.is_3d_mode:
             rad_yaw = math.radians(self.yaw_deg)
             rad_pitch = math.radians(self.pitch_deg)
-            rx = x * math.cos(rad_yaw) - y * math.sin(rad_yaw)
-            ry = x * math.sin(rad_yaw) + y * math.cos(rad_yaw)
+
+            # Standard ETABS 3D View Transformation:
+            # Horizontal screen coordinate = X * cos(yaw) + Y * sin(yaw)
+            # Vertical screen coordinate = Z * cos(pitch) - (X * sin(yaw) - Y * cos(yaw)) * sin(pitch)
+            rx = x * math.cos(rad_yaw) + y * math.sin(rad_yaw)
+            ry = x * math.sin(rad_yaw) - y * math.cos(rad_yaw)
+
             iso_x = rx
-            iso_y = ry * math.sin(rad_pitch) - z * math.cos(rad_pitch)
+            iso_y = z * math.cos(rad_pitch) - ry * math.sin(rad_pitch)
+
             sx = self.pan_offset.x() + iso_x * self.zoom_factor
             sy = self.pan_offset.y() - iso_y * self.zoom_factor
             return QPointF(sx, sy)
@@ -168,16 +176,33 @@ class ModelViewerWidget(QWidget):
             sy = self.pan_offset.y() - y * self.zoom_factor
             return QPointF(sx, sy)
 
+    def _resolve_color(self, element_color: Optional[str], default_hex: str) -> QColor:
+        if element_color and isinstance(element_color, str):
+            c = element_color.strip()
+            if c.startswith("#"):
+                return QColor(c)
+            elif c.isdigit():
+                # ETABS integer color index mapping
+                try:
+                    idx = int(c)
+                    palette = ["#1e40af", "#d946ef", "#ef4444", "#3b82f6", "#10b981", "#f59e0b", "#8b5cf6"]
+                    return QColor(palette[idx % len(palette)])
+                except Exception:
+                    pass
+            elif len(c) == 6 and all(ch in '0123456789ABCDEFabcdef' for ch in c):
+                return QColor(f"#{c}")
+        return QColor(default_hex)
+
     def paintEvent(self, event):
         painter = QPainter(self)
         try:
             painter.setRenderHint(QPainter.Antialiasing)
 
-            # Dark Canvas Background
-            painter.fillRect(self.rect(), QColor("#111827"))
+            # ETABS Canvas Background
+            painter.fillRect(self.rect(), QColor("#ffffff"))
 
-            # Draw Grid
-            pen_grid = QPen(QColor("#1f2937"), 1, Qt.DashLine)
+            # Draw Grid Lines
+            pen_grid = QPen(QColor("#e879f9"), 1, Qt.SolidLine)
             painter.setPen(pen_grid)
             for gx in range(-50, 60, 10):
                 p1 = self._world_to_screen(gx, -50, 0.0)
@@ -185,7 +210,7 @@ class ModelViewerWidget(QWidget):
                 painter.drawLine(p1, p2)
             for gy in range(-50, 60, 10):
                 p1 = self._world_to_screen(-50, gy, 0.0)
-                p2 = self._world_to_screen(50, gy, 0.0)
+                p2 = self._world_to_screen(-50, gy, 0.0)
                 painter.drawLine(p1, p2)
 
             if not self.floor_model:
@@ -194,38 +219,49 @@ class ModelViewerWidget(QWidget):
                 painter.drawText(self.rect(), Qt.AlignCenter, "Load an ETABS model file to view 2D/3D floor layout.")
                 return
 
-            z_level = self.floor_model.story.elevation if self.is_3d_mode else 0.0
+            z_level = self.floor_model.story.elevation if (self.is_3d_mode and self.floor_model and self.floor_model.story) else 0.0
+            story_h = self.floor_model.story.height if (self.floor_model and self.floor_model.story and self.floor_model.story.height > 0) else 3.5
 
-            # 1. Draw Slabs
+            # 1. Draw Slabs (Dynamic extracted color or ETABS default)
             if self.show_slabs and self.floor_model.slabs:
                 for slab in self.floor_model.slabs:
                     poly = QPolygonF()
+                    slab_z = slab.elevation if (self.is_3d_mode and hasattr(slab, 'elevation') and slab.elevation != 0.0) else z_level
                     for pt in slab.polygon:
-                        poly.append(self._world_to_screen(pt.x, pt.y, z_level))
+                        poly.append(self._world_to_screen(pt.x, pt.y, slab_z))
                     
-                    painter.setPen(QPen(QColor("#3b82f6"), 2))
-                    painter.setBrush(QBrush(QColor(59, 130, 246, 45)))
+                    s_color = self._resolve_color(getattr(slab, 'color', None), "#3b82f6")
+                    painter.setPen(QPen(s_color, 2))
+                    fill_color = QColor(s_color)
+                    fill_color.setAlpha(120)
+                    painter.setBrush(QBrush(fill_color))
                     painter.drawPolygon(poly)
 
             # 2. Draw Openings
             if self.show_openings and self.floor_model.openings:
                 for op in self.floor_model.openings:
                     poly = QPolygonF()
+                    op_z = op.elevation if (self.is_3d_mode and hasattr(op, 'elevation') and op.elevation != 0.0) else z_level
                     for pt in op.polygon:
-                        poly.append(self._world_to_screen(pt.x, pt.y, z_level))
+                        poly.append(self._world_to_screen(pt.x, pt.y, op_z))
                     
-                    painter.setPen(QPen(QColor("#ef4444"), 2, Qt.DashLine))
-                    painter.setBrush(QBrush(QColor(239, 68, 68, 60)))
+                    painter.setPen(QPen(QColor("#000000"), 2, Qt.SolidLine))
+                    painter.setBrush(QBrush(QColor(255, 255, 255)))
                     painter.drawPolygon(poly)
 
-            # 3. Draw Beams
+            # 3. Draw Beams (Dynamic extracted section color or ETABS beam magenta)
             if self.show_beams and self.floor_model.beams:
-                painter.setPen(QPen(QColor("#10b981"), 3))
                 for bm in self.floor_model.beams:
-                    z1 = bm.start_point.z if (self.is_3d_mode and hasattr(bm.start_point, 'z')) else z_level
-                    z2 = bm.end_point.z if (self.is_3d_mode and hasattr(bm.end_point, 'z')) else z_level
-                    p1 = self._world_to_screen(bm.start_point.x, bm.start_point.y, z1)
-                    p2 = self._world_to_screen(bm.end_point.x, bm.end_point.y, z2)
+                    bm_color = self._resolve_color(getattr(bm, 'color', None), "#d946ef")
+                    painter.setPen(QPen(bm_color, 2))
+                    sp = bm.start_point
+                    ep = bm.end_point
+                    if not sp or not ep:
+                        continue
+                    z1 = sp.z if (self.is_3d_mode and hasattr(sp, 'z') and sp.z != 0.0) else z_level
+                    z2 = ep.z if (self.is_3d_mode and hasattr(ep, 'z') and ep.z != 0.0) else z_level
+                    p1 = self._world_to_screen(sp.x, sp.y, z1)
+                    p2 = self._world_to_screen(ep.x, ep.y, z2)
                     painter.drawLine(p1, p2)
 
                     if self.show_labels:
@@ -234,40 +270,104 @@ class ModelViewerWidget(QWidget):
                         painter.setPen(QPen(QColor("#34d399")))
                         painter.setFont(QFont("Segoe UI", 8))
                         painter.drawText(int(mid_x), int(mid_y), str(bm.id))
-                        painter.setPen(QPen(QColor("#10b981"), 3))
 
-            # 4. Draw Columns (3D Vertical Frames in 3D Mode, Cap Boxes in 2D Mode)
+            # 4. Draw Columns (Dynamic extracted column color or ETABS blue/amber)
             if self.show_columns:
-                all_cols = self.floor_model.columns_above + self.floor_model.columns_below
-                for col in all_cols:
-                    z1 = col.start_point.z if self.is_3d_mode else 0.0
-                    z2 = col.end_point.z if self.is_3d_mode else 0.0
-                    p1 = self._world_to_screen(col.start_point.x, col.start_point.y, z1)
-                    p2 = self._world_to_screen(col.end_point.x, col.end_point.y, z2)
-                    
+                # Process columns below (supporting floor from below)
+                for col in self.floor_model.columns_below:
+                    sp = col.start_point
+                    ep = col.end_point
+                    if not sp or not ep:
+                        continue
+
+                    col_color = self._resolve_color(getattr(col, 'color', None), "#1e40af")
                     if self.is_3d_mode:
-                        # Draw 3D column vertical line
-                        painter.setPen(QPen(QColor("#f59e0b"), 3))
-                        painter.drawLine(p1, p2)
-                        # Draw top and bottom end caps
-                        painter.setBrush(QBrush(QColor("#f59e0b")))
+                        max_z = max(sp.z, ep.z)
+                        min_z = min(sp.z, ep.z)
+                        if abs(max_z - min_z) < 0.01:
+                            top_z = z_level
+                            bot_z = z_level - story_h
+                        else:
+                            top_z = max_z
+                            bot_z = min_z
+
+                        col_x = ep.x if abs(ep.z - top_z) < 0.1 else sp.x
+                        col_y = ep.y if abs(ep.z - top_z) < 0.1 else sp.y
+
+                        p_bot = self._world_to_screen(col_x, col_y, bot_z)
+                        p_top = self._world_to_screen(col_x, col_y, top_z)
+
+                        painter.setPen(QPen(col_color, 3))
+                        painter.drawLine(p_bot, p_top)
+                        painter.setBrush(QBrush(col_color))
                         r = max(3, int(4 * (self.zoom_factor / 20.0)))
                         r = min(r, 8)
-                        painter.drawRect(int(p2.x() - r/2), int(p2.y() - r/2), r, r)
+                        painter.drawRect(int(p_bot.x() - r/2), int(p_bot.y() - r/2), r, r)
+                        painter.drawRect(int(p_top.x() - r/2), int(p_top.y() - r/2), r, r)
                     else:
-                        painter.setPen(QPen(QColor("#f59e0b"), 2))
-                        painter.setBrush(QBrush(QColor("#f59e0b")))
-                        r = max(4, int(6 * (self.zoom_factor / 20.0)))
-                        r = min(r, 12)
+                        p1 = self._world_to_screen(sp.x, sp.y, 0.0)
+                        painter.setPen(QPen(col_color, 2))
+                        col_fill = QColor(col_color)
+                        col_fill.setAlpha(40)
+                        painter.setBrush(QBrush(col_fill))
+                        r = max(5, int(7 * (self.zoom_factor / 20.0)))
+                        r = min(r, 14)
                         painter.drawRect(int(p1.x() - r/2), int(p1.y() - r/2), r, r)
 
                     if self.show_labels:
                         painter.setPen(QPen(QColor("#fbbf24")))
                         painter.setFont(QFont("Segoe UI", 8))
-                        pt_label = p2 if self.is_3d_mode else p1
+                        pt_label = p_top if self.is_3d_mode else p1
                         painter.drawText(int(pt_label.x() + 6), int(pt_label.y() + 3), str(col.id))
 
-            # 5. Draw Walls (3D Quad Faces in 3D Mode, Line Segments in 2D Mode)
+                # Process columns above (reactions above floor)
+                for col in self.floor_model.columns_above:
+                    sp = col.start_point
+                    ep = col.end_point
+                    if not sp or not ep:
+                        continue
+
+                    col_color = self._resolve_color(getattr(col, 'color', None), "#a855f7")
+                    if self.is_3d_mode:
+                        max_z = max(sp.z, ep.z)
+                        min_z = min(sp.z, ep.z)
+                        if abs(max_z - min_z) < 0.01:
+                            bot_z = z_level
+                            top_z = z_level + story_h
+                        else:
+                            bot_z = min_z
+                            top_z = max_z
+
+                        col_x = sp.x if abs(sp.z - bot_z) < 0.1 else ep.x
+                        col_y = sp.y if abs(sp.z - bot_z) < 0.1 else ep.y
+
+                        p_bot = self._world_to_screen(col_x, col_y, bot_z)
+                        p_top = self._world_to_screen(col_x, col_y, top_z)
+
+                        painter.setPen(QPen(col_color, 3))
+                        painter.drawLine(p_bot, p_top)
+                        painter.setBrush(QBrush(col_color))
+                        r = max(3, int(4 * (self.zoom_factor / 20.0)))
+                        r = min(r, 8)
+                        painter.drawRect(int(p_bot.x() - r/2), int(p_bot.y() - r/2), r, r)
+                        painter.drawRect(int(p_top.x() - r/2), int(p_top.y() - r/2), r, r)
+                    else:
+                        p1 = self._world_to_screen(sp.x, sp.y, 0.0)
+                        painter.setPen(QPen(col_color, 2))
+                        col_fill = QColor(col_color)
+                        col_fill.setAlpha(40)
+                        painter.setBrush(QBrush(col_fill))
+                        r = max(5, int(7 * (self.zoom_factor / 20.0)))
+                        r = min(r, 14)
+                        painter.drawRect(int(p1.x() - r/2), int(p1.y() - r/2), r, r)
+
+                    if self.show_labels:
+                        painter.setPen(QPen(QColor("#c084fc")))
+                        painter.setFont(QFont("Segoe UI", 8))
+                        pt_label = p_top if self.is_3d_mode else p1
+                        painter.drawText(int(pt_label.x() + 6), int(pt_label.y() + 3), str(col.id))
+
+            # 5. Draw Walls (Dynamic extracted wall color or ETABS red)
             if self.show_walls:
                 all_walls = self.floor_model.walls_above + self.floor_model.walls_below
                 for wall in all_walls:
@@ -275,6 +375,7 @@ class ModelViewerWidget(QWidget):
                     w_ep = getattr(wall, 'end_point', None)
                     if not w_sp or not w_ep:
                         continue
+                    w_color = self._resolve_color(getattr(wall, 'color', None), "#ef4444")
                     z1 = w_sp.z if self.is_3d_mode else 0.0
                     z2 = w_ep.z if self.is_3d_mode else 0.0
                     p1_bot = self._world_to_screen(w_sp.x, w_sp.y, z1)
@@ -284,11 +385,13 @@ class ModelViewerWidget(QWidget):
 
                     if self.is_3d_mode and abs(z2 - z1) > 0.01:
                         wall_poly = QPolygonF([p1_bot, p2_bot, p2_top, p1_top])
-                        painter.setPen(QPen(QColor("#8b5cf6"), 2))
-                        painter.setBrush(QBrush(QColor(139, 92, 246, 75)))
+                        painter.setPen(QPen(w_color, 2))
+                        w_fill = QColor(w_color)
+                        w_fill.setAlpha(60)
+                        painter.setBrush(QBrush(w_fill))
                         painter.drawPolygon(wall_poly)
                     else:
-                        painter.setPen(QPen(QColor("#8b5cf6"), 4))
+                        painter.setPen(QPen(w_color, 4))
                         painter.drawLine(p1_bot, p2_bot)
 
             # 6. Draw Nodes / Joint Points
