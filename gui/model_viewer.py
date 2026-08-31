@@ -159,14 +159,10 @@ class ModelViewerWidget(QWidget):
             rad_yaw = math.radians(self.yaw_deg)
             rad_pitch = math.radians(self.pitch_deg)
 
-            # Standard ETABS 3D View Transformation:
-            # Horizontal screen coordinate = X * cos(yaw) + Y * sin(yaw)
-            # Vertical screen coordinate = Z * cos(pitch) - (X * sin(yaw) - Y * cos(yaw)) * sin(pitch)
-            rx = x * math.cos(rad_yaw) + y * math.sin(rad_yaw)
-            ry = x * math.sin(rad_yaw) - y * math.cos(rad_yaw)
-
-            iso_x = rx
-            iso_y = z * math.cos(rad_pitch) - ry * math.sin(rad_pitch)
+            # ETABS Standard Axonometric Isometric View Projection:
+            # X & Y axes rotated around Z-axis, Z elevation projects vertically UP (+Screen Y)
+            iso_x = x * math.cos(rad_yaw) - y * math.sin(rad_yaw)
+            iso_y = (x * math.sin(rad_yaw) + y * math.cos(rad_yaw)) * math.sin(rad_pitch) + z * math.cos(rad_pitch)
 
             sx = self.pan_offset.x() + iso_x * self.zoom_factor
             sy = self.pan_offset.y() - iso_y * self.zoom_factor
@@ -226,7 +222,7 @@ class ModelViewerWidget(QWidget):
             if self.show_slabs and self.floor_model.slabs:
                 for slab in self.floor_model.slabs:
                     poly = QPolygonF()
-                    slab_z = slab.elevation if (self.is_3d_mode and hasattr(slab, 'elevation') and slab.elevation != 0.0) else z_level
+                    slab_z = slab.elevation if self.is_3d_mode else 0.0
                     for pt in slab.polygon:
                         poly.append(self._world_to_screen(pt.x, pt.y, slab_z))
                     
@@ -241,7 +237,7 @@ class ModelViewerWidget(QWidget):
             if self.show_openings and self.floor_model.openings:
                 for op in self.floor_model.openings:
                     poly = QPolygonF()
-                    op_z = op.elevation if (self.is_3d_mode and hasattr(op, 'elevation') and op.elevation != 0.0) else z_level
+                    op_z = op.elevation if self.is_3d_mode else 0.0
                     for pt in op.polygon:
                         poly.append(self._world_to_screen(pt.x, pt.y, op_z))
                     
@@ -258,10 +254,11 @@ class ModelViewerWidget(QWidget):
                     ep = bm.end_point
                     if not sp or not ep:
                         continue
-                    z1 = sp.z if (self.is_3d_mode and hasattr(sp, 'z') and sp.z != 0.0) else z_level
-                    z2 = ep.z if (self.is_3d_mode and hasattr(ep, 'z') and ep.z != 0.0) else z_level
+                    z1 = sp.z if self.is_3d_mode else 0.0
+                    z2 = ep.z if self.is_3d_mode else 0.0
                     p1 = self._world_to_screen(sp.x, sp.y, z1)
                     p2 = self._world_to_screen(ep.x, ep.y, z2)
+                    painter.drawLine(p1, p2)
                     painter.drawLine(p1, p2)
 
                     if self.show_labels:

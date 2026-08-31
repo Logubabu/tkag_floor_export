@@ -29,22 +29,22 @@ class FloorExtractor:
 
         story_elev = target_story.elevation
         story_height = target_story.height if target_story.height > 0 else 3.5
-        elev_tol = 0.35  # meters tolerance for story floor level
+        elev_tol = max(0.5, story_height * 0.45)  # Dynamic height-based tolerance for story floor level
 
         s_name_clean = story_name.strip().lower().replace(" ", "").replace("_", "").replace("-", "")
 
-        # Strict exact story match helper
+        # Flex story match helper (handles MASTER/SIMILARTO relationships)
         def is_story_match(val: Optional[str]) -> bool:
             if not val:
                 return False
             clean_val = val.strip().lower().replace(" ", "").replace("_", "").replace("-", "")
-            return clean_val == s_name_clean
+            return clean_val == s_name_clean or s_name_clean in clean_val or clean_val in s_name_clean
 
         # 2. Extract Slabs & Openings for story
         slabs: List[Slab] = []
         openings: List[Slab] = []
         for sl in model.slabs:
-            if is_story_match(sl.story) or abs(sl.elevation - story_elev) < elev_tol:
+            if is_story_match(sl.story) or abs(sl.elevation - story_elev) < elev_tol or (not sl.story and len(model.stories) == 1):
                 if sl.is_opening:
                     openings.append(sl)
                 else:
@@ -54,7 +54,7 @@ class FloorExtractor:
         beams: List[Frame] = []
         for fr in model.frames:
             if fr.type == FrameType.BEAM:
-                if is_story_match(fr.story) or (abs(fr.start_point.z - story_elev) < elev_tol and abs(fr.end_point.z - story_elev) < elev_tol):
+                if is_story_match(fr.story) or abs(fr.start_point.z - story_elev) < elev_tol or abs(fr.end_point.z - story_elev) < elev_tol or (not fr.story and len(model.stories) == 1):
                     beams.append(fr)
 
         # 4. Mode A — Slab Only return
@@ -68,7 +68,7 @@ class FloorExtractor:
                 area_loads=[al for al in model.area_loads if is_story_match(al.story)]
             )
 
-        # 5. Extract Columns Above and Below with exact elevation bounds
+        # 5. Extract Columns Above and Below with flexible story & elevation bounds
         columns_above: List[Frame] = []
         columns_below: List[Frame] = []
 
@@ -84,12 +84,12 @@ class FloorExtractor:
                 elif abs(min_z - story_elev) < elev_tol:
                     columns_above.append(fr)
                 # Column Spanning across floor elevation
-                elif min_z + 0.1 < story_elev < max_z - 0.1:
+                elif min_z - 0.1 <= story_elev <= max_z + 0.1:
                     columns_below.append(fr)
-                elif is_story_match(fr.story):
+                elif is_story_match(fr.story) or len(model.stories) == 1:
                     columns_below.append(fr)
 
-        # 6. Extract Walls Above and Below with exact elevation bounds
+        # 6. Extract Walls Above and Below with flexible story & elevation bounds
         walls_above: List[Wall] = []
         walls_below: List[Wall] = []
         for w in model.walls:
@@ -100,15 +100,15 @@ class FloorExtractor:
                 walls_below.append(w)
             elif abs(min_z - story_elev) < elev_tol:
                 walls_above.append(w)
-            elif min_z + 0.1 < story_elev < max_z - 0.1:
+            elif min_z - 0.1 <= story_elev <= max_z + 0.1:
                 walls_below.append(w)
-            elif is_story_match(w.story):
+            elif is_story_match(w.story) or len(model.stories) == 1:
                 walls_below.append(w)
 
         # 7. Extract Nodes on story floor level
         floor_nodes: List[Node] = []
         for nd in model.nodes.values():
-            if abs(nd.z - story_elev) < elev_tol or is_story_match(nd.story):
+            if abs(nd.z - story_elev) < elev_tol or is_story_match(nd.story) or len(model.stories) == 1:
                 floor_nodes.append(nd)
 
         # 8. Filter Loads for story

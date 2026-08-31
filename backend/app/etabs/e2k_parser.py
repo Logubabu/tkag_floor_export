@@ -430,10 +430,15 @@ class E2KParser:
         if not line.startswith("LINE"):
             return
         tokens = [t.strip('"') for t in re.findall(r'"[^"]+"|\S+', line)]
-        if len(tokens) >= 4 and tokens[0].upper() == "LINE":
+        if len(tokens) >= 3 and tokens[0].upper() == "LINE":
             frame_id = tokens[1]
-            p1_id = tokens[2]
-            p2_id = tokens[3]
+            raw_toks = tokens[2:]
+            if raw_toks and raw_toks[0].upper() in ["BEAM", "COLUMN", "LINE"]:
+                raw_toks = raw_toks[1:]
+            
+            p1_id = raw_toks[0] if len(raw_toks) >= 1 else "N1"
+            p2_id = raw_toks[1] if len(raw_toks) >= 2 else "N2"
+
             if "POINT" in [t.upper() for t in tokens]:
                 idx = [i for i, t in enumerate(tokens) if t.upper() == "POINT"]
                 if idx and len(tokens) > idx[0] + 2:
@@ -495,16 +500,21 @@ class E2KParser:
         st_match = next((st for st in self.model.stories if st.name.lower() == story_name.lower()), None)
         st_elev = st_match.elevation if st_match else 0.0
 
-        p1_z = p1_node.z if (p1_node and p1_node.z != 0.0) else st_elev
-        p2_z = p2_node.z if (p2_node and p2_node.z != 0.0) else st_elev
+        p1_x = p1_node.x if p1_node else 0.0
+        p1_y = p1_node.y if p1_node else 0.0
+        p1_z = p1_node.z if p1_node else st_elev
+
+        p2_x = p2_node.x if p2_node else 0.0
+        p2_y = p2_node.y if p2_node else 0.0
+        p2_z = p2_node.z if p2_node else st_elev
 
         self.model.frames.append(Frame(
             id=f"{frame_id}_{story_name}",
             type=f_type,
             start_node=p1_id,
             end_node=p2_id,
-            start_point=Point3D(x=p1_node.x if p1_node else 0.0, y=p1_node.y if p1_node else 0.0, z=p1_z),
-            end_point=Point3D(x=p2_node.x if p2_node else 0.0, y=p2_node.y if p2_node else 0.0, z=p2_z),
+            start_point=Point3D(x=p1_x, y=p1_y, z=p1_z),
+            end_point=Point3D(x=p2_x, y=p2_y, z=p2_z),
             section=sec_name,
             story=story_name,
             color=frame_color
@@ -517,25 +527,24 @@ class E2KParser:
         if len(tokens) >= 3:
             area_id = tokens[1] if tokens[0].upper() in ["AREA", "AREACONNECTIVITY"] else tokens[0]
             
-            # Extract point names explicitly following POINT keywords if present
+            # In ETABS text table format: AREA "F27" FLOOR 34 "176" "174" ... 0 0 0
+            # Identify where point node strings start
             pt_names = []
             if "POINT" in [t.upper() for t in tokens]:
                 for idx, t in enumerate(tokens):
                     if t.upper() == "POINT" and idx + 1 < len(tokens):
                         pt_names.append(tokens[idx + 1])
             else:
-                # In $ AREA CONNECTIVITIES format: AREA "F27" FLOOR 34 "176" "174" ... 0 0 0
-                # Skip area type (e.g. FLOOR/SLAB/WALL) and point-count integer (e.g. 34)
-                start_idx = 2
-                if len(tokens) > 3 and tokens[2].upper() in ["FLOOR", "SLAB", "WALL", "PANEL", "WALLPANEL"]:
-                    start_idx = 3
-                if start_idx < len(tokens) and tokens[start_idx].isdigit():
-                    num_pts = int(tokens[start_idx])
-                    raw_pts = tokens[start_idx+1:]
-                    pt_names = [p for p in raw_pts if p != "0"][:num_pts]
+                raw_toks = tokens[2:]
+                if raw_toks and raw_toks[0].upper() in ["FLOOR", "SLAB", "WALL", "PANEL", "WALLPANEL", "AREA"]:
+                    raw_toks = raw_toks[1:]
+                if raw_toks and raw_toks[0].isdigit():
+                    num_pts = int(raw_toks[0])
+                    # Point IDs follow the num_pts count integer
+                    pt_names = [p for p in raw_toks[1:] if p != "0"][:num_pts]
                 else:
-                    pt_names = [t for t in tokens[2:] if t.upper() not in ["AREA", "AREACONNECTIVITY", "POINT", "TYPE", "SLAB", "WALL", "PANEL", "FLOOR"] and t != "0"]
-            
+                    pt_names = [p for p in raw_toks if p != "0" and p.upper() not in ["AREA", "AREACONNECTIVITY", "POINT", "TYPE", "SLAB", "WALL", "PANEL", "FLOOR"]]
+
             if pt_names:
                 self.area_nodes[area_id] = pt_names
             if "PANEL" in line.upper() or area_id.startswith("W") or "WALL" in line.upper():
