@@ -71,52 +71,61 @@ class ExportThread(QThread):
         self.formats = formats
 
     def run(self):
+        try:
+            import pythoncom
+            pythoncom.CoInitialize()
+        except Exception:
+            pass
+
         success_count = 0
         total = len(self.selected_stories)
 
-        for idx, story_name in enumerate(self.selected_stories, 1):
+        try:
+            for idx, story_name in enumerate(self.selected_stories, 1):
+                try:
+                    self.progress_signal.emit(f"[{idx}/{total}] Extracting floor geometry for story: {story_name}...")
+                    floor_model = FloorExtractor.extract_floor(
+                        self.b_model, story_name, ExtractionMode.SLAB_AND_SUPPORTS
+                    )
+
+                    self.progress_signal.emit(f"[{idx}/{total}] Exporting RAM Concept model for story: {story_name}...")
+                    exporter = RAMConceptExporter(floor_model)
+
+                    clean_story = "".join(c for c in story_name if c.isalnum() or c in ['_', '-'])
+                    floor_folder = os.path.join(self.output_dir, f"Floor_{clean_story}")
+                    res = exporter.generate_output(floor_folder)
+
+                    cpt_path = res.get("cpt_file", "")
+                    py_path = res.get("automation_script", "")
+
+                    # Generate Report & Import Instructions text file
+                    conv_sum = {
+                        "source_slabs": len(floor_model.slabs), "converted_slabs": len(floor_model.slabs),
+                        "source_openings": len(floor_model.openings), "converted_openings": len(floor_model.openings),
+                        "source_beams": len(floor_model.beams), "converted_beams": len(floor_model.beams),
+                        "source_columns": len(floor_model.columns_above) + len(floor_model.columns_below), "converted_columns": len(floor_model.columns_above) + len(floor_model.columns_below),
+                        "source_walls": len(floor_model.walls_above) + len(floor_model.walls_below), "converted_walls": len(floor_model.walls_above) + len(floor_model.walls_below),
+                    }
+                    ReportGenerator.generate_report(clean_story, conv_sum, {}, res, floor_folder)
+
+                    if cpt_path and os.path.exists(cpt_path) and os.path.getsize(cpt_path) > 1000:
+                        size_mb = os.path.getsize(cpt_path) / (1024 * 1024)
+                        self.progress_signal.emit(f"✓ Native .CPT model generated for {story_name} ({size_mb:.2f} MB) in '{floor_folder}'")
+                    else:
+                        self.progress_signal.emit(f"✓ DXF exchange model generated for {story_name} in '{floor_folder}'")
+                    
+                    self.item_complete_signal.emit(story_name, cpt_path if cpt_path and os.path.exists(cpt_path) and os.path.getsize(cpt_path) > 1000 else "")
+                    success_count += 1
+                except Exception as e:
+                    self.progress_signal.emit(f"✗ Failed to export story {story_name}: {str(e)}")
+
+            self.finished_signal.emit(success_count, total)
+        finally:
             try:
-                self.progress_signal.emit(f"[{idx}/{total}] Extracting floor geometry for story: {story_name}...")
-                floor_model = FloorExtractor.extract_floor(
-                    self.b_model, story_name, ExtractionMode.SLAB_AND_SUPPORTS
-                )
-
-                self.progress_signal.emit(f"[{idx}/{total}] Exporting RAM Concept model for story: {story_name}...")
-                exporter = RAMConceptExporter(floor_model)
-
-                clean_story = "".join(c for c in story_name if c.isalnum() or c in ['_', '-'])
-                floor_folder = os.path.join(self.output_dir, f"Floor_{clean_story}")
-                res = exporter.generate_output(floor_folder)
-
-                cpt_path = res.get("cpt_file", "")
-                py_path = res.get("automation_script", "")
-                
-                if py_path and os.path.exists(py_path):
-                    self.progress_signal.emit(f"[{idx}/{total}] Executing in-tool RAM Concept COM Automation for story: {story_name}...")
-                    exporter.execute_automation_script(py_path, cpt_path, log_callback=self.progress_signal.emit)
-
-                # Generate Report & Import Instructions text file
-                conv_sum = {
-                    "source_slabs": len(floor_model.slabs), "converted_slabs": len(floor_model.slabs),
-                    "source_openings": len(floor_model.openings), "converted_openings": len(floor_model.openings),
-                    "source_beams": len(floor_model.beams), "converted_beams": len(floor_model.beams),
-                    "source_columns": len(floor_model.columns_above) + len(floor_model.columns_below), "converted_columns": len(floor_model.columns_above) + len(floor_model.columns_below),
-                    "source_walls": len(floor_model.walls_above) + len(floor_model.walls_below), "converted_walls": len(floor_model.walls_above) + len(floor_model.walls_below),
-                }
-                ReportGenerator.generate_report(clean_story, conv_sum, {}, res, floor_folder)
-
-                if cpt_path and os.path.exists(cpt_path) and os.path.getsize(cpt_path) > 0:
-                    size_mb = os.path.getsize(cpt_path) / (1024 * 1024)
-                    self.progress_signal.emit(f"✓ Native .CPT model generated for {story_name} ({size_mb:.2f} MB) in '{floor_folder}'")
-                else:
-                    self.progress_signal.emit(f"✓ DXF exchange model generated for {story_name} in '{floor_folder}'")
-                
-                self.item_complete_signal.emit(story_name, cpt_path if cpt_path and os.path.exists(cpt_path) and os.path.getsize(cpt_path) > 0 else "")
-                success_count += 1
-            except Exception as e:
-                self.progress_signal.emit(f"✗ Failed to export story {story_name}: {str(e)}")
-
-        self.finished_signal.emit(success_count, total)
+                import pythoncom
+                pythoncom.CoUninitialize()
+            except Exception:
+                pass
 
 
 class RAMExporterMainWindow(QMainWindow):

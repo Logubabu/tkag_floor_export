@@ -117,6 +117,27 @@ class RAMConceptDetector:
             return None, None, None, None
 
         python_dir = os.path.join(os.path.dirname(concept_exe), "python")
+        concept_dir = os.path.dirname(concept_exe)
+
+        # 1. Add DLL directory search paths for Windows Python 3.8+ (crucial for PyInstaller frozen app)
+        if hasattr(os, "add_dll_directory"):
+            try:
+                os.add_dll_directory(concept_dir)
+            except Exception:
+                pass
+            if os.path.exists(python_dir):
+                try:
+                    os.add_dll_directory(python_dir)
+                except Exception:
+                    pass
+
+        # 2. Update PATH env var for legacy C++ DLL resolution
+        path_env = os.environ.get("PATH", "")
+        if concept_dir not in path_env:
+            os.environ["PATH"] = concept_dir + os.path.pathsep + path_env
+        if os.path.exists(python_dir) and python_dir not in os.environ.get("PATH", ""):
+            os.environ["PATH"] = python_dir + os.path.pathsep + os.environ.get("PATH", "")
+
         if os.path.exists(python_dir):
             if python_dir not in sys.path:
                 sys.path.insert(0, python_dir)

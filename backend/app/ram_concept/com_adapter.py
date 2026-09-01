@@ -93,3 +93,39 @@ class RAMConceptCOMAdapter:
                 "error": str(e),
                 "message": f"Failed to push floor model to RAM Concept via COM: {e}"
             }
+
+    def import_dxf_and_save(self, dxf_filepath: str, cpt_filepath: str) -> bool:
+        """
+        Imports DXF CAD layer floor geometry into a new RAM Concept document and saves the native .CPT model.
+        """
+        if not self.is_connected or not self.app:
+            success, _ = self.connect()
+            if not success:
+                return False
+
+        try:
+            abs_dxf = os.path.abspath(dxf_filepath)
+            abs_cpt = os.path.abspath(cpt_filepath)
+
+            if hasattr(self.app, "NewDocument"):
+                self.doc = self.app.NewDocument()
+            elif hasattr(self.app, "ActiveDocument"):
+                self.doc = self.app.ActiveDocument
+
+            if self.doc:
+                if hasattr(self.doc, "ImportDXF"):
+                    self.doc.ImportDXF(abs_dxf)
+                elif hasattr(self.doc, "ImportCAD"):
+                    self.doc.ImportCAD(abs_dxf)
+
+                if hasattr(self.doc, "SaveAs"):
+                    self.doc.SaveAs(abs_cpt)
+                elif hasattr(self.doc, "Save"):
+                    self.doc.Save(abs_cpt)
+
+                if os.path.exists(abs_cpt) and os.path.getsize(abs_cpt) > 100000:
+                    return True
+        except Exception as e:
+            print(f"COM import_dxf_and_save error: {e}")
+        return False
+
