@@ -3,7 +3,8 @@ import sys
 import os
 from PyInstaller.utils.hooks import collect_all
 
-datas = [('frontend/dist', 'static'), ('backend/app', 'app')]
+datas = [('frontend/dist', 'static') if os.path.exists('frontend/dist') else None, ('backend/app', 'app'), ('backend', 'backend')]
+datas = [d for d in datas if d is not None]
 binaries = []
 hiddenimports = [
     'win32com',

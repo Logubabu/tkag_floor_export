@@ -4,7 +4,10 @@ Checks Windows registry and standard CSI program installation directories.
 """
 import os
 import sys
-import winreg
+try:
+    import winreg
+except ImportError:
+    winreg = None
 from typing import List, Dict, Optional
 
 class ETABSVersionDetector:
@@ -20,9 +23,9 @@ class ETABSVersionDetector:
     ]
     
     REGISTRY_KEYS = [
-        (winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\Computers and Structures, Inc.\ETABS"),
-        (winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\WOW6432Node\Computers and Structures, Inc.\ETABS"),
-        (winreg.HKEY_CURRENT_USER, r"SOFTWARE\Computers and Structures, Inc.\ETABS"),
+        (winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\Computers and Structures, Inc.\ETABS") if winreg else (None, ""),
+        (winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\WOW6432Node\Computers and Structures, Inc.\ETABS") if winreg else (None, ""),
+        (winreg.HKEY_CURRENT_USER, r"SOFTWARE\Computers and Structures, Inc.\ETABS") if winreg else (None, ""),
     ]
 
     @classmethod

@@ -186,10 +186,29 @@ class RobustE2KParser:
         story_name = quotes[1] if len(quotes) >= 2 else "Level 1"
         sec_match = re.search(r'(?:SECTION|PROPERTY)\s+"([^"]+)"', line)
         prop_name = sec_match.group(1) if sec_match else "SLAB"
-        is_opening = prop_name.upper() in ["OPENING", "VOID", "OPEN"]
+        prop_upper = prop_name.upper()
+        is_opening = (
+            prop_upper in ["OPENING", "VOID", "OPEN", "NONE", "CUTOUT", "SHAFT", "HOLE"] or
+            any(k in prop_upper for k in ["OPEN", "VOID", "CUTOUT", "SHAFT", "HOLE"])
+        )
 
         pt_ids = self.area_nodes.get(area_id, [])
-        polygon = [Point2D(x=self.model.nodes[pid].x, y=self.model.nodes[pid].y) for pid in pt_ids if pid in self.model.nodes]
+        polygon: List[Point2D] = []
+
+        coord_matches = re.findall(r'\(\s*([-0-9.]+)\s*,\s*([-0-9.]+)(?:\s*,\s*([-0-9.]+))?\s*\)', line)
+        if coord_matches:
+            for m in coord_matches:
+                polygon.append(Point2D(x=float(m[0]), y=float(m[1])))
+
+        if not polygon:
+            pts_match = re.search(r'POINTS\s+((?:"[^"]+"\s*)+)', line, re.IGNORECASE)
+            if pts_match:
+                node_names = re.findall(r'"([^"]+)"', pts_match.group(1))
+                if node_names:
+                    pt_ids = node_names
+
+        if not polygon and pt_ids:
+            polygon = [Point2D(x=self.model.nodes[pid].x, y=self.model.nodes[pid].y) for pid in pt_ids if pid in self.model.nodes]
 
         if area_id.startswith("W") or self.area_types.get(area_id) == "Wall" or "WALL" in prop_name.upper() or "CW" in prop_name.upper() or "SW" in prop_name.upper():
             self.model.walls.append(Wall(
@@ -199,6 +218,14 @@ class RobustE2KParser:
                 thickness=0.3,
                 property_name=prop_name
             ))
+        elif is_opening:
+            from app.models.intermediate import Opening
+            self.model.openings.append(Opening(
+                id=f"{area_id}_{story_name}",
+                story=story_name,
+                polygon=polygon,
+                points=[(p.x, p.y) for p in polygon]
+            ))
         else:
             self.model.slabs.append(Slab(
                 id=f"{area_id}_{story_name}",
@@ -206,7 +233,7 @@ class RobustE2KParser:
                 polygon=polygon,
                 thickness=0.25,
                 property_name=prop_name,
-                is_opening=is_opening
+                is_opening=False
             ))
 
     def _post_process(self):

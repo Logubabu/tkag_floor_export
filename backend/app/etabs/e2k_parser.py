@@ -564,11 +564,42 @@ class E2KParser:
 
         sec_match = re.search(r'(?:SECTION|PROPERTY)\s+(?:"([^"]+)"|([A-Za-z0-9_ -]+))', line, re.IGNORECASE)
         prop_name = (sec_match.group(1) or sec_match.group(2)).strip() if sec_match else "SLAB"
-        is_opening = prop_name.upper() in ["OPENING", "VOID", "OPEN"]
+        prop_upper = prop_name.upper()
+        is_opening = (
+            prop_upper in ["OPENING", "VOID", "OPEN", "NONE", "CUTOUT", "SHAFT", "HOLE"] or
+            any(k in prop_upper for k in ["OPEN", "VOID", "CUTOUT", "SHAFT", "HOLE"]) or
+            "TYPE OPENING" in line.upper() or
+            "ISOPENING" in line.upper() or
+            re.search(r'\bTYPE\s+"?OPENING"?\b', line, re.IGNORECASE) is not None
+        )
 
         pt_ids = self.area_nodes.get(area_id, [])
-        polygon = [Point2D(x=self.model.nodes[pid].x, y=self.model.nodes[pid].y) for pid in pt_ids if pid in self.model.nodes]
-        z_coords = [self.model.nodes[pid].z for pid in pt_ids if pid in self.model.nodes]
+        polygon: List[Point2D] = []
+        z_coords: List[float] = []
+
+        # 1. Try extracting direct coordinates from POINTS_COORD (x,y) or (x,y,z)
+        coord_matches = re.findall(r'\(\s*([-0-9.]+)\s*,\s*([-0-9.]+)(?:\s*,\s*([-0-9.]+))?\s*\)', line)
+        if coord_matches:
+            for m in coord_matches:
+                px = float(m[0])
+                py = float(m[1])
+                polygon.append(Point2D(x=px, y=py))
+                if m[2]:
+                    z_coords.append(float(m[2]))
+
+        # 2. Try extracting point node names from POINTS "P1" "P2"...
+        if not polygon:
+            pts_match = re.search(r'POINTS\s+((?:"[^"]+"\s*)+)', line, re.IGNORECASE)
+            if pts_match:
+                node_names = re.findall(r'"([^"]+)"', pts_match.group(1))
+                if node_names:
+                    pt_ids = node_names
+
+        # 3. Resolve point IDs from self.model.nodes if polygon not yet set
+        if not polygon and pt_ids:
+            polygon = [Point2D(x=self.model.nodes[pid].x, y=self.model.nodes[pid].y) for pid in pt_ids if pid in self.model.nodes]
+            z_coords = [self.model.nodes[pid].z for pid in pt_ids if pid in self.model.nodes]
+
         avg_z = sum(z_coords) / len(z_coords) if z_coords else 0.0
 
         if (avg_z == 0.0 or not z_coords) and story_name:
@@ -595,6 +626,14 @@ class E2KParser:
                 bottom_z=avg_z,
                 color=prop_color
             ))
+        elif is_opening:
+            from app.models.intermediate import Opening
+            self.model.openings.append(Opening(
+                id=f"{area_id}_{story_name}",
+                story=story_name,
+                polygon=polygon,
+                points=[(p.x, p.y) for p in polygon]
+            ))
         else:
             self.model.slabs.append(Slab(
                 id=f"{area_id}_{story_name}",
@@ -602,7 +641,7 @@ class E2KParser:
                 polygon=polygon,
                 thickness=thick,
                 property_name=prop_name,
-                is_opening=is_opening,
+                is_opening=False,
                 elevation=avg_z,
                 color=prop_color
             ))
@@ -658,11 +697,16 @@ class E2KParser:
 
             story_info = {st.name.strip().lower(): (st.elevation, st.height if st.height > 0 else 3.5) for st in self.model.stories}
 
-            # Map calculated story elevations and Z coordinates to Slabs
+            # Map calculated story elevations and Z coordinates to Slabs and Openings
             for sl in self.model.slabs:
                 if sl.story and sl.story.strip().lower() in story_info:
                     top, _ = story_info[sl.story.strip().lower()]
                     sl.elevation = top
+
+            for op in self.model.openings:
+                if op.story and op.story.strip().lower() in story_info:
+                    top, _ = story_info[op.story.strip().lower()]
+                    op.elevation = top
 
             # Map calculated story elevations and Z coordinates to Frames (Beams & Columns)
             for fr in self.model.frames:

@@ -32,6 +32,7 @@ class ModelViewerWidget(QWidget):
         self.show_columns: bool = True
         self.show_walls: bool = True
         self.show_openings: bool = True
+        self.show_loads: bool = True
         self.show_nodes: bool = True
         self.show_labels: bool = True
 
@@ -218,32 +219,58 @@ class ModelViewerWidget(QWidget):
             z_level = self.floor_model.story.elevation if (self.is_3d_mode and self.floor_model and self.floor_model.story) else 0.0
             story_h = self.floor_model.story.height if (self.floor_model and self.floor_model.story and self.floor_model.story.height > 0) else 3.5
 
-            # 1. Draw Slabs (Dynamic extracted color or ETABS default)
+            # 1. Draw Slabs with Openings subtracted using QPainterPath OddEvenFill
             if self.show_slabs and self.floor_model.slabs:
+                from PySide6.QtGui import QPainterPath
+
                 for slab in self.floor_model.slabs:
+                    path = QPainterPath()
+                    path.setFillRule(Qt.OddEvenFill)
+
+                    # Add slab polygon
                     poly = QPolygonF()
-                    slab_z = slab.elevation if self.is_3d_mode else 0.0
+                    slab_z = getattr(slab, 'elevation', z_level) if self.is_3d_mode else 0.0
                     for pt in slab.polygon:
                         poly.append(self._world_to_screen(pt.x, pt.y, slab_z))
-                    
+                    path.addPolygon(poly)
+
+                    # Subtract opening polygons lying within or on slab
+                    if self.show_openings and self.floor_model.openings:
+                        for op in self.floor_model.openings:
+                            op_poly = QPolygonF()
+                            op_z = getattr(op, 'elevation', z_level) if self.is_3d_mode else 0.0
+                            for pt in op.polygon:
+                                op_poly.append(self._world_to_screen(pt.x, pt.y, op_z))
+                            path.addPolygon(op_poly)
+
                     s_color = self._resolve_color(getattr(slab, 'color', None), "#3b82f6")
                     painter.setPen(QPen(s_color, 2))
                     fill_color = QColor(s_color)
                     fill_color.setAlpha(120)
                     painter.setBrush(QBrush(fill_color))
-                    painter.drawPolygon(poly)
+                    painter.drawPath(path)
 
-            # 2. Draw Openings
+            # 2. Draw Openings (Dashed borders with translucent cutout indicator and X cross)
             if self.show_openings and self.floor_model.openings:
+                op_pen = QPen(QColor("#ef4444"), 2, Qt.DashLine)
+                op_brush = QBrush(QColor(239, 68, 68, 40))
                 for op in self.floor_model.openings:
-                    poly = QPolygonF()
-                    op_z = op.elevation if self.is_3d_mode else 0.0
+                    op_poly = QPolygonF()
+                    op_z = getattr(op, 'elevation', z_level) if self.is_3d_mode else 0.0
                     for pt in op.polygon:
-                        poly.append(self._world_to_screen(pt.x, pt.y, op_z))
-                    
-                    painter.setPen(QPen(QColor("#000000"), 2, Qt.SolidLine))
-                    painter.setBrush(QBrush(QColor(255, 255, 255)))
-                    painter.drawPolygon(poly)
+                        op_poly.append(self._world_to_screen(pt.x, pt.y, op_z))
+
+                    if not op_poly.isEmpty():
+                        painter.setPen(op_pen)
+                        painter.setBrush(op_brush)
+                        painter.drawPolygon(op_poly)
+
+                        # Draw 'X' cross symbol inside opening for structural clarity
+                        if op_poly.count() >= 3:
+                            boundingRect = op_poly.boundingRect()
+                            painter.setPen(QPen(QColor("#dc2626"), 1, Qt.DotLine))
+                            painter.drawLine(boundingRect.topLeft(), boundingRect.bottomRight())
+                            painter.drawLine(boundingRect.topRight(), boundingRect.bottomLeft())
 
             # 3. Draw Beams (Dynamic extracted section color or ETABS beam magenta)
             if self.show_beams and self.floor_model.beams:
@@ -368,28 +395,35 @@ class ModelViewerWidget(QWidget):
             if self.show_walls:
                 all_walls = self.floor_model.walls_above + self.floor_model.walls_below
                 for wall in all_walls:
-                    w_sp = getattr(wall, 'start_point', None)
-                    w_ep = getattr(wall, 'end_point', None)
-                    if not w_sp or not w_ep:
-                        continue
                     w_color = self._resolve_color(getattr(wall, 'color', None), "#ef4444")
-                    z1 = w_sp.z if self.is_3d_mode else 0.0
-                    z2 = w_ep.z if self.is_3d_mode else 0.0
-                    p1_bot = self._world_to_screen(w_sp.x, w_sp.y, z1)
-                    p2_bot = self._world_to_screen(w_ep.x, w_ep.y, z1)
-                    p1_top = self._world_to_screen(w_sp.x, w_sp.y, z2)
-                    p2_top = self._world_to_screen(w_ep.x, w_ep.y, z2)
+                    pts_w = []
+                    if hasattr(wall, "polygon") and wall.polygon:
+                        pts_w = wall.polygon
+                    elif hasattr(wall, "start_point") and wall.start_point and hasattr(wall, "end_point") and wall.end_point:
+                        pts_w = [wall.start_point, wall.end_point]
 
-                    if self.is_3d_mode and abs(z2 - z1) > 0.01:
-                        wall_poly = QPolygonF([p1_bot, p2_bot, p2_top, p1_top])
-                        painter.setPen(QPen(w_color, 2))
-                        w_fill = QColor(w_color)
-                        w_fill.setAlpha(60)
-                        painter.setBrush(QBrush(w_fill))
-                        painter.drawPolygon(wall_poly)
-                    else:
-                        painter.setPen(QPen(w_color, 4))
-                        painter.drawLine(p1_bot, p2_bot)
+                    if len(pts_w) >= 2:
+                        p1_sp = pts_w[0]
+                        p2_ep = pts_w[-1]
+                        z1 = p1_sp.z if hasattr(p1_sp, 'z') and self.is_3d_mode else 0.0
+                        z2 = p2_ep.z if hasattr(p2_ep, 'z') and self.is_3d_mode else 0.0
+
+                        p1_bot = self._world_to_screen(p1_sp.x if hasattr(p1_sp, 'x') else p1_sp[0], p1_sp.y if hasattr(p1_sp, 'y') else p1_sp[1], z1)
+                        p2_bot = self._world_to_screen(p2_ep.x if hasattr(p2_ep, 'x') else p2_ep[0], p2_ep.y if hasattr(p2_ep, 'y') else p2_ep[1], z1)
+
+                        if self.is_3d_mode:
+                            top_z = z1 + story_h
+                            p1_top = self._world_to_screen(p1_sp.x if hasattr(p1_sp, 'x') else p1_sp[0], p1_sp.y if hasattr(p1_sp, 'y') else p1_sp[1], top_z)
+                            p2_top = self._world_to_screen(p2_ep.x if hasattr(p2_ep, 'x') else p2_ep[0], p2_ep.y if hasattr(p2_ep, 'y') else p2_ep[1], top_z)
+                            wall_poly = QPolygonF([p1_bot, p2_bot, p2_top, p1_top])
+                            painter.setPen(QPen(w_color, 2))
+                            w_fill = QColor(w_color)
+                            w_fill.setAlpha(120)
+                            painter.setBrush(QBrush(w_fill))
+                            painter.drawPolygon(wall_poly)
+                        else:
+                            painter.setPen(QPen(w_color, 4))
+                            painter.drawLine(p1_bot, p2_bot)
 
             # 6. Draw Nodes / Joint Points
             if self.show_nodes and self.floor_model:
@@ -416,6 +450,52 @@ class ModelViewerWidget(QWidget):
                 for nx, ny, nz in all_nodes:
                     pt_screen = self._world_to_screen(nx, ny, nz)
                     painter.drawEllipse(int(pt_screen.x() - r), int(pt_screen.y() - r), r*2, r*2)
+
+            # 8. Draw Area Load Patterns with Openings Deducted
+            if getattr(self, "show_loads", True) and hasattr(self.floor_model, "area_loads") and self.floor_model.area_loads:
+                from PySide6.QtGui import QPainterPath
+                from backend.app.models.intermediate import Point2D
+
+                for aload in self.floor_model.area_loads:
+                    pat_name = getattr(aload, "pattern", "DEAD")
+                    mag = getattr(aload, "magnitude", getattr(aload, "value", 0.0))
+                    pat_color = QColor("#f59e0b") if "LIVE" in pat_name.upper() else QColor("#ea580c")
+
+                    target_polys = []
+                    if hasattr(aload, "points") and aload.points and len(aload.points) >= 3:
+                        target_polys.append([Point2D(x=p[0], y=p[1]) for p in aload.points])
+                    elif self.floor_model.slabs:
+                        for sl in self.floor_model.slabs:
+                            target_polys.append(sl.polygon)
+
+                    for poly_pts in target_polys:
+                        path_load = QPainterPath()
+                        path_load.setFillRule(Qt.OddEvenFill)
+
+                        load_poly = QPolygonF()
+                        for pt in poly_pts:
+                            load_poly.append(self._world_to_screen(pt.x, pt.y, z_level))
+                        path_load.addPolygon(load_poly)
+
+                        if self.floor_model.openings:
+                            for op in self.floor_model.openings:
+                                op_poly = QPolygonF()
+                                op_z = getattr(op, 'elevation', z_level) if self.is_3d_mode else 0.0
+                                for pt in op.polygon:
+                                    op_poly.append(self._world_to_screen(pt.x, pt.y, op_z))
+                                path_load.addPolygon(op_poly)
+
+                        painter.setPen(QPen(pat_color, 1, Qt.DashDotLine))
+                        load_fill = QColor(pat_color)
+                        load_fill.setAlpha(60)
+                        painter.setBrush(QBrush(load_fill))
+                        painter.drawPath(path_load)
+
+                        if self.show_labels and not load_poly.isEmpty():
+                            center_pt = load_poly.boundingRect().center()
+                            painter.setPen(QPen(pat_color))
+                            painter.setFont(QFont("Segoe UI", 8, QFont.Bold))
+                            painter.drawText(center_pt, f"[{pat_name}] {mag:.2f} kN/m²")
 
             # 7. Draw ETABS RGB Axis Triad (Lower-Left Corner)
             triad_ox, triad_oy = 45, self.height() - 45

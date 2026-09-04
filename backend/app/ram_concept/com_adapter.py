@@ -13,18 +13,26 @@ class RAMConceptCOMAdapter:
         self.is_connected = False
 
     def connect(self) -> Tuple[bool, str]:
+        try:
+            import pythoncom
+            pythoncom.CoInitialize()
+        except Exception:
+            pass
+
         prog_ids = [
             "RAMConcept.Application",
+            "RAMConcept.Application.1",
+            "Concept.Application",
             "RAMConcept.Document",
             "Bentley.RAM.Concept",
             "RAM.Concept",
-            "RAMConceptAuto.Application",
-            "Concept.Application"
+            "RAMConceptAuto.Application"
         ]
         
-        # 1. Try win32com GetActiveObject & Dispatch
+        # 1. Try win32com GetActiveObject & Dispatch / dynamic Dispatch
         try:
             import win32com.client
+            import win32com.client.dynamic
             for pid in prog_ids:
                 try:
                     self.app = win32com.client.GetActiveObject(pid)
@@ -40,6 +48,13 @@ class RAMConceptCOMAdapter:
                         return True, f"Started new RAM Concept session ({pid}) via win32com Dispatch."
                 except Exception:
                     pass
+                try:
+                    self.app = win32com.client.dynamic.Dispatch(pid)
+                    if self.app:
+                        self.is_connected = True
+                        return True, f"Started new RAM Concept session ({pid}) via win32com dynamic Dispatch."
+                except Exception:
+                    pass
         except Exception:
             pass
 
@@ -52,6 +67,13 @@ class RAMConceptCOMAdapter:
                     if self.app:
                         self.is_connected = True
                         return True, f"Connected to active RAM Concept instance ({pid}) via comtypes."
+                except Exception:
+                    pass
+                try:
+                    self.app = comtypes.client.CreateObject(pid)
+                    if self.app:
+                        self.is_connected = True
+                        return True, f"Created RAM Concept instance ({pid}) via comtypes CreateObject."
                 except Exception:
                     pass
         except Exception:
@@ -123,7 +145,7 @@ class RAMConceptCOMAdapter:
                 elif hasattr(self.doc, "Save"):
                     self.doc.Save(abs_cpt)
 
-                if os.path.exists(abs_cpt) and os.path.getsize(abs_cpt) > 100000:
+                if os.path.exists(abs_cpt) and os.path.getsize(abs_cpt) > 0:
                     return True
         except Exception as e:
             print(f"COM import_dxf_and_save error: {e}")

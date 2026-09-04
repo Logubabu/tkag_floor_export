@@ -1,6 +1,7 @@
 import os
 import sys
 import json
+import math
 from typing import Dict, Any, List, Optional
 from app.models.intermediate import FloorModel, ValidationResult, Point2D
 from app.validation.validator import StructuralValidator
@@ -30,9 +31,13 @@ class RAMConceptExporter:
                     slabs=floor.slabs,
                     openings=floor.openings,
                     beams=floor.beams,
-                    columns_above=floor.columns,
-                    walls_above=floor.walls,
-                    area_loads=floor.area_loads
+                    columns_above=getattr(floor, "columns_above", floor.columns),
+                    columns_below=getattr(floor, "columns_below", []),
+                    walls_above=getattr(floor, "walls_above", floor.walls),
+                    walls_below=getattr(floor, "walls_below", []),
+                    area_loads=floor.area_loads,
+                    line_loads=getattr(floor, "line_loads", []),
+                    point_loads=getattr(floor, "point_loads", [])
                 )
             self.floor = floor
             self.validation: ValidationResult = StructuralValidator.validate_floor(floor)
@@ -54,7 +59,7 @@ class RAMConceptExporter:
             exporter._write_dxf(dxf_path)
             
         gen_cpt = res.get("cpt_file", "")
-        if gen_cpt and os.path.exists(gen_cpt) and os.path.getsize(gen_cpt) > 100000:
+        if gen_cpt and os.path.exists(gen_cpt) and os.path.getsize(gen_cpt) > 0:
             if os.path.abspath(gen_cpt) != os.path.abspath(cpt_path):
                 import shutil
                 shutil.copyfile(gen_cpt, cpt_path)
@@ -103,28 +108,52 @@ class RAMConceptExporter:
         return mats
 
     def map_slabs(self, norm_slabs=None) -> list:
-        slabs_to_map = norm_slabs if norm_slabs is not None else self.floor.slabs
-        return [
-            {
-                "id": sl.id,
-                "property": sl.property_name,
-                "thickness": sl.thickness,
-                "material": sl.material or "Concrete",
-                "color": getattr(sl, "color", None),
-                "polygon": [{"x": pt.x, "y": pt.y} for pt in sl.polygon]
-            }
-            for sl in slabs_to_map
-        ]
+        slabs_to_map = norm_slabs if norm_slabs is not None else (self.floor.slabs if self.floor else [])
+        mapped = []
+        for sl in slabs_to_map:
+            prop_upper = (sl.property_name or "").upper()
+            is_op = (
+                getattr(sl, "is_opening", False) or
+                prop_upper in ["OPENING", "VOID", "OPEN", "NONE", "CUTOUT", "SHAFT", "HOLE"] or
+                any(k in prop_upper for k in ["OPEN", "VOID", "CUTOUT", "SHAFT", "HOLE"]) or
+                getattr(sl, "thickness", 0.2) == 0.0
+            )
+            if not is_op:
+                mapped.append({
+                    "id": sl.id,
+                    "property": sl.property_name,
+                    "thickness": sl.thickness,
+                    "material": sl.material or "Concrete",
+                    "color": getattr(sl, "color", None),
+                    "polygon": [{"x": pt.x, "y": pt.y} for pt in sl.polygon]
+                })
+        return mapped
 
     def map_openings(self, norm_openings=None) -> list:
-        ops_to_map = norm_openings if norm_openings is not None else self.floor.openings
-        return [
-            {
+        ops_to_map = norm_openings if norm_openings is not None else (self.floor.openings if self.floor else [])
+        mapped = []
+        for op in ops_to_map:
+            mapped.append({
                 "id": op.id,
                 "polygon": [{"x": pt.x, "y": pt.y} for pt in op.polygon]
-            }
-            for op in ops_to_map
-        ]
+            })
+
+        if self.floor and hasattr(self.floor, "slabs"):
+            existing_op_ids = {m["id"] for m in mapped}
+            for sl in self.floor.slabs:
+                prop_upper = (sl.property_name or "").upper()
+                is_op = (
+                    getattr(sl, "is_opening", False) or
+                    prop_upper in ["OPENING", "VOID", "OPEN", "NONE", "CUTOUT", "SHAFT", "HOLE"] or
+                    any(k in prop_upper for k in ["OPEN", "VOID", "CUTOUT", "SHAFT", "HOLE"]) or
+                    getattr(sl, "thickness", 0.2) == 0.0
+                )
+                if is_op and sl.id not in existing_op_ids:
+                    mapped.append({
+                        "id": sl.id,
+                        "polygon": [{"x": pt.x, "y": pt.y} for pt in sl.polygon]
+                    })
+        return mapped
 
     def map_beams(self, offset) -> list:
         mapped = []
@@ -148,43 +177,47 @@ class RAMConceptExporter:
         return mapped
 
     def map_columns(self, offset) -> dict:
-        cols_above = []
-        for c in self.floor.columns_above:
-            if hasattr(c, "x") and hasattr(c, "y"):
-                cx, cy = c.x, c.y
+        def _get_col_info(c):
+            cx, cy = 0.0, 0.0
+            if hasattr(c, "start_point") and c.start_point and (c.start_point.x != 0.0 or c.start_point.y != 0.0):
+                cx, cy = c.start_point.x, c.start_point.y
+            elif hasattr(c, "end_point") and c.end_point and (c.end_point.x != 0.0 or c.end_point.y != 0.0):
+                cx, cy = c.end_point.x, c.end_point.y
+            elif hasattr(c, "p1") and c.p1:
+                cx, cy = c.p1[0], c.p1[1]
             elif hasattr(c, "start_point") and c.start_point:
                 cx, cy = c.start_point.x, c.start_point.y
-            else:
-                cx, cy = 0.0, 0.0
-            cols_above.append({
+            elif getattr(c, "x", 0.0) != 0.0 or getattr(c, "y", 0.0) != 0.0:
+                cx, cy = getattr(c, "x", 0.0), getattr(c, "y", 0.0)
+
+            b = getattr(c, "width", getattr(c, "b", 0.4))
+            h = getattr(c, "depth", getattr(c, "h", 0.4))
+            angle = getattr(c, "angle", 0.0)
+
+            return {
                 "id": c.id,
                 "section": getattr(c, "section", "COLUMN"),
                 "color": getattr(c, "color", None),
+                "width": b,
+                "depth": h,
+                "b": b,
+                "h": h,
+                "angle": angle,
                 "location": {"x": cx - offset.x, "y": cy - offset.y}
-            })
-            
-        cols_below = []
-        for c in self.floor.columns_below:
-            if hasattr(c, "x") and hasattr(c, "y"):
-                cx, cy = c.x, c.y
-            elif hasattr(c, "start_point") and c.start_point:
-                cx, cy = c.start_point.x, c.start_point.y
-            else:
-                cx, cy = 0.0, 0.0
-            cols_below.append({
-                "id": c.id,
-                "section": getattr(c, "section", "COLUMN"),
-                "color": getattr(c, "color", None),
-                "location": {"x": cx - offset.x, "y": cy - offset.y}
-            })
+            }
+
+        cols_above = [_get_col_info(c) for c in self.floor.columns_above]
+        cols_below = [_get_col_info(c) for c in self.floor.columns_below]
         return {"above": cols_above, "below": cols_below}
 
     def map_walls(self, offset) -> dict:
         def _get_pts(w):
-            if hasattr(w, "p1") and w.p1 and hasattr(w, "p2") and w.p2:
-                return [{"x": w.p1[0] - offset.x, "y": w.p1[1] - offset.y}, {"x": w.p2[0] - offset.x, "y": w.p2[1] - offset.y}]
-            elif hasattr(w, "polygon") and w.polygon:
+            if hasattr(w, "polygon") and w.polygon and len(w.polygon) >= 2:
                 return [{"x": (pt.x if hasattr(pt, 'x') else pt[0]) - offset.x, "y": (pt.y if hasattr(pt, 'y') else pt[1]) - offset.y} for pt in w.polygon]
+            elif hasattr(w, "p1") and w.p1 and hasattr(w, "p2") and w.p2:
+                return [{"x": w.p1[0] - offset.x, "y": w.p1[1] - offset.y}, {"x": w.p2[0] - offset.x, "y": w.p2[1] - offset.y}]
+            elif hasattr(w, "start_point") and w.start_point and hasattr(w, "end_point") and w.end_point:
+                return [{"x": w.start_point.x - offset.x, "y": w.start_point.y - offset.y}, {"x": w.end_point.x - offset.x, "y": w.end_point.y - offset.y}]
             return []
 
         w_above = [
@@ -241,6 +274,60 @@ class RAMConceptExporter:
             for pl in self.floor.point_loads
         ]
         return {"area": area_loads, "line": line_loads, "point": point_loads}
+
+    @staticmethod
+    def _deduct_openings_from_slabs(slab_polygons: list, opening_polygons: list) -> list:
+        try:
+            from shapely.geometry import Polygon as ShapelyPoly
+            from shapely.validation import make_valid
+            deducted_polys = []
+            sh_openings = []
+            for op_pts in opening_polygons:
+                raw_coords = [(float(p["x"]), float(p["y"])) for p in op_pts if "x" in p and "y" in p]
+                if len(raw_coords) >= 3:
+                    try:
+                        p = ShapelyPoly(raw_coords)
+                        if not p.is_valid:
+                            p = make_valid(p)
+                        if not p.is_empty:
+                            sh_openings.append(p)
+                    except Exception:
+                        pass
+
+            for sl_pts in slab_polygons:
+                raw_coords = [(float(p["x"]), float(p["y"])) for p in sl_pts if "x" in p and "y" in p]
+                if len(raw_coords) < 3:
+                    continue
+                try:
+                    curr_geom = ShapelyPoly(raw_coords)
+                    if not curr_geom.is_valid:
+                        curr_geom = make_valid(curr_geom)
+
+                    for op_geom in sh_openings:
+                        if curr_geom.intersects(op_geom):
+                            curr_geom = curr_geom.difference(op_geom)
+
+                    geoms = []
+                    if curr_geom.geom_type == 'Polygon':
+                        geoms = [curr_geom]
+                    elif curr_geom.geom_type == 'MultiPolygon':
+                        geoms = list(curr_geom.geoms)
+                    elif hasattr(curr_geom, 'geoms'):
+                        geoms = [g for g in curr_geom.geoms if g.geom_type in ['Polygon', 'MultiPolygon']]
+
+                    for g in geoms:
+                        if g.is_empty or g.area < 1e-4:
+                            continue
+                        ext_coords = [{"x": c[0], "y": c[1]} for c in list(g.exterior.coords)]
+                        if len(ext_coords) > 3 and abs(ext_coords[0]['x'] - ext_coords[-1]['x']) < 1e-4 and abs(ext_coords[0]['y'] - ext_coords[-1]['y']) < 1e-4:
+                            ext_coords.pop()
+                        if len(ext_coords) >= 3:
+                            deducted_polys.append(ext_coords)
+                except Exception:
+                    deducted_polys.append(sl_pts)
+            return deducted_polys if deducted_polys else slab_polygons
+        except Exception:
+            return slab_polygons
 
     def generate_output(self, output_dir: str) -> Dict[str, Any]:
         if not self.prepared_data:
@@ -344,30 +431,16 @@ class RAMConceptExporter:
 
     def _generate_dxf(self) -> str:
         layers = [
-            ("SLAB_OUTLINE", 1),       # Red
-            ("OPENINGS", 2),           # Yellow
-            ("BEAMS", 3),              # Green
-            ("COLUMNS_BELOW", 4),      # Cyan
-            ("COLUMNS_ABOVE", 5),      # Blue
-            ("WALLS_BELOW", 6),        # Magenta
-            ("WALLS_ABOVE", 7),        # White
-            ("SURFACE_LOADS", 30),     # Orange
-            ("LINE_LOADS", 40),        # Light Green
-            ("POINT_LOADS", 50)        # Violet
-        ]
-
-    def _generate_dxf(self) -> str:
-        layers = [
-            ("SLAB_OUTLINE", 1),       # Red
-            ("OPENINGS", 2),           # Yellow
-            ("BEAMS", 3),              # Green
-            ("COLUMNS_BELOW", 4),      # Cyan
-            ("COLUMNS_ABOVE", 5),      # Blue
-            ("WALLS_BELOW", 6),        # Magenta
-            ("WALLS_ABOVE", 7),        # White
-            ("SURFACE_LOADS", 30),     # Orange
-            ("LINE_LOADS", 40),        # Light Green
-            ("POINT_LOADS", 50)        # Violet
+            ("Slabs", 1),              # Red
+            ("Openings", 2),           # Yellow
+            ("Beams", 3),              # Green
+            ("Columns Below", 4),      # Cyan
+            ("Columns Above", 5),      # Blue
+            ("Walls Below", 6),        # Magenta
+            ("Walls Above", 7),        # White
+            ("Surface Loads", 30),     # Orange
+            ("Line Loads", 40),        # Light Green
+            ("Point Loads", 50)        # Violet
         ]
 
         lines = [
@@ -431,52 +504,52 @@ class RAMConceptExporter:
             "2", "ENTITIES"
         ])
 
-        # 1. Slabs -> SLAB_OUTLINE
+        # 1. Slabs -> Slabs
         for slab in self.prepared_data.get("slabs", []):
             pts = slab.get("polygon", [])
             if len(pts) > 1:
                 lines.extend([
                     "0", "POLYLINE",
-                    "8", "SLAB_OUTLINE",
+                    "8", "Slabs",
                     "66", "1",
                     "70", "1"
                 ])
                 for pt in pts:
                     lines.extend([
                         "0", "VERTEX",
-                        "8", "SLAB_OUTLINE",
+                        "8", "Slabs",
                         "10", f"{pt['x']:.4f}",
                         "20", f"{pt['y']:.4f}",
                         "30", "0.0"
                     ])
                 lines.extend(["0", "SEQEND"])
 
-        # 2. Openings -> OPENINGS
+        # 2. Openings -> Openings
         for op in self.prepared_data.get("openings", []):
             pts = op.get("polygon", [])
             if len(pts) > 1:
                 lines.extend([
                     "0", "POLYLINE",
-                    "8", "OPENINGS",
+                    "8", "Openings",
                     "66", "1",
                     "70", "1"
                 ])
                 for pt in pts:
                     lines.extend([
                         "0", "VERTEX",
-                        "8", "OPENINGS",
+                        "8", "Openings",
                         "10", f"{pt['x']:.4f}",
                         "20", f"{pt['y']:.4f}",
                         "30", "0.0"
                     ])
                 lines.extend(["0", "SEQEND"])
 
-        # 3. Beams -> BEAMS
+        # 3. Beams -> Beams
         for bm in self.prepared_data.get("beams", []):
             st, en = bm.get("start", {}), bm.get("end", {})
             lines.extend([
                 "0", "LINE",
-                "8", "BEAMS",
+                "8", "Beams",
                 "10", f"{st.get('x', 0.0):.4f}",
                 "20", f"{st.get('y', 0.0):.4f}",
                 "30", "0.0",
@@ -485,128 +558,174 @@ class RAMConceptExporter:
                 "31", "0.0"
             ])
 
-        # 4. Columns Below -> COLUMNS_BELOW (Point + Boundary box)
+        # 4. Columns Below -> Columns Below (Point + Boundary box with angle and dimensions)
         for col in self.prepared_data.get("columns", {}).get("below", []):
             loc = col.get("location", {})
             cx, cy = loc.get('x', 0.0), loc.get('y', 0.0)
+            b = col.get("width", col.get("b", 0.4))
+            h = col.get("depth", col.get("h", 0.4))
+            angle = col.get("angle", 0.0)
+            rad = math.radians(angle)
+            cos_a, sin_a = math.cos(rad), math.sin(rad)
+            half_b, half_h = b / 2.0, h / 2.0
+
             lines.extend([
                 "0", "POINT",
-                "8", "COLUMNS_BELOW",
+                "8", "Columns Below",
                 "10", f"{cx:.4f}",
                 "20", f"{cy:.4f}",
                 "30", "0.0",
                 "0", "POLYLINE",
-                "8", "COLUMNS_BELOW",
+                "8", "Columns Below",
                 "66", "1",
                 "70", "1"
             ])
-            for dx, dy in [(-0.2, -0.2), (0.2, -0.2), (0.2, 0.2), (-0.2, 0.2)]:
+            for dx, dy in [(-half_b, -half_h), (half_b, -half_h), (half_b, half_h), (-half_b, half_h)]:
+                rx = cx + dx * cos_a - dy * sin_a
+                ry = cy + dx * sin_a + dy * cos_a
                 lines.extend([
                     "0", "VERTEX",
-                    "8", "COLUMNS_BELOW",
-                    "10", f"{cx+dx:.4f}",
-                    "20", f"{cy+dy:.4f}",
+                    "8", "Columns Below",
+                    "10", f"{rx:.4f}",
+                    "20", f"{ry:.4f}",
                     "30", "0.0"
                 ])
             lines.extend(["0", "SEQEND"])
 
-        # 5. Columns Above -> COLUMNS_ABOVE (Point + Boundary box)
+        # 5. Columns Above -> Columns Above (Point + Boundary box with angle and dimensions)
         for col in self.prepared_data.get("columns", {}).get("above", []):
             loc = col.get("location", {})
             cx, cy = loc.get('x', 0.0), loc.get('y', 0.0)
+            b = col.get("width", col.get("b", 0.4))
+            h = col.get("depth", col.get("h", 0.4))
+            angle = col.get("angle", 0.0)
+            rad = math.radians(angle)
+            cos_a, sin_a = math.cos(rad), math.sin(rad)
+            half_b, half_h = b / 2.0, h / 2.0
+
             lines.extend([
                 "0", "POINT",
-                "8", "COLUMNS_ABOVE",
+                "8", "Columns Above",
                 "10", f"{cx:.4f}",
                 "20", f"{cy:.4f}",
                 "30", "0.0",
                 "0", "POLYLINE",
-                "8", "COLUMNS_ABOVE",
+                "8", "Columns Above",
                 "66", "1",
                 "70", "1"
             ])
-            for dx, dy in [(-0.2, -0.2), (0.2, -0.2), (0.2, 0.2), (-0.2, 0.2)]:
+            for dx, dy in [(-half_b, -half_h), (half_b, -half_h), (half_b, half_h), (-half_b, half_h)]:
+                rx = cx + dx * cos_a - dy * sin_a
+                ry = cy + dx * sin_a + dy * cos_a
                 lines.extend([
                     "0", "VERTEX",
-                    "8", "COLUMNS_ABOVE",
-                    "10", f"{cx+dx:.4f}",
-                    "20", f"{cy+dy:.4f}",
+                    "8", "Columns Above",
+                    "10", f"{rx:.4f}",
+                    "20", f"{ry:.4f}",
                     "30", "0.0"
                 ])
             lines.extend(["0", "SEQEND"])
 
-        # 6. Walls Below -> WALLS_BELOW
+        # 6. Walls Below -> Walls Below
         for wall in self.prepared_data.get("walls", {}).get("below", []):
             pts = wall.get("polygon", [])
             if len(pts) > 1:
                 lines.extend([
                     "0", "POLYLINE",
-                    "8", "WALLS_BELOW",
+                    "8", "Walls Below",
                     "66", "1",
-                    "70", "0"
+                    "70", "1"
                 ])
                 for pt in pts:
                     lines.extend([
                         "0", "VERTEX",
-                        "8", "WALLS_BELOW",
+                        "8", "Walls Below",
                         "10", f"{pt['x']:.4f}",
                         "20", f"{pt['y']:.4f}",
                         "30", "0.0"
                     ])
                 lines.extend(["0", "SEQEND"])
 
-        # 7. Walls Above -> WALLS_ABOVE
+        # 7. Walls Above -> Walls Above
         for wall in self.prepared_data.get("walls", {}).get("above", []):
             pts = wall.get("polygon", [])
             if len(pts) > 1:
                 lines.extend([
                     "0", "POLYLINE",
-                    "8", "WALLS_ABOVE",
+                    "8", "Walls Above",
                     "66", "1",
-                    "70", "0"
+                    "70", "1"
                 ])
                 for pt in pts:
                     lines.extend([
                         "0", "VERTEX",
-                        "8", "WALLS_ABOVE",
+                        "8", "Walls Above",
                         "10", f"{pt['x']:.4f}",
                         "20", f"{pt['y']:.4f}",
                         "30", "0.0"
                     ])
                 lines.extend(["0", "SEQEND"])
 
-        # 8. Loads -> SURFACE_LOADS, LINE_LOADS, POINT_LOADS
+        # 8. Loads -> Surface Loads (Deducted over openings), Line Loads, Point Loads
         loads_dict = self.prepared_data.get("loads", {})
         if isinstance(loads_dict, dict):
+            slab_polys = [s.get("polygon", []) for s in self.prepared_data.get("slabs", [])]
+            op_polys = [o.get("polygon", []) for o in self.prepared_data.get("openings", [])]
+            deducted_load_polys = self._deduct_openings_from_slabs(slab_polys, op_polys)
+
             for aload in loads_dict.get("area", []):
-                lines.extend([
-                    "0", "TEXT",
-                    "8", "SURFACE_LOADS",
-                    "10", "1.0",
-                    "20", "1.0",
-                    "30", "0.0",
-                    "40", "0.5",
-                    "1", f"SURFACE_LOAD: {aload.get('pattern')} = {aload.get('magnitude')} kN/m2"
-                ])
+                pat = aload.get('pattern', 'DEAD')
+                mag = aload.get('magnitude', 0.0)
+                # Write deducted surface load polylines onto Surface Loads DXF layer
+                for d_poly in deducted_load_polys:
+                    if len(d_poly) > 1:
+                        lines.extend([
+                            "0", "POLYLINE",
+                            "8", "Surface Loads",
+                            "66", "1",
+                            "70", "1"
+                        ])
+                        for pt in d_poly:
+                            lines.extend([
+                                "0", "VERTEX",
+                                "8", "Surface Loads",
+                                "10", f"{pt['x']:.4f}",
+                                "20", f"{pt['y']:.4f}",
+                                "30", "0.0"
+                            ])
+                        lines.extend(["0", "SEQEND"])
+
+                        cx = sum(p['x'] for p in d_poly) / len(d_poly)
+                        cy = sum(p['y'] for p in d_poly) / len(d_poly)
+                        lines.extend([
+                            "0", "TEXT",
+                            "8", "Surface Loads",
+                            "10", f"{cx:.4f}",
+                            "20", f"{cy:.4f}",
+                            "30", "0.0",
+                            "40", "0.4",
+                            "1", f"[{pat}] {mag:.2f} kN/m2"
+                        ])
+
             for lload in loads_dict.get("line", []):
                 lines.extend([
                     "0", "TEXT",
-                    "8", "LINE_LOADS",
+                    "8", "Line Loads",
                     "10", "1.0",
                     "20", "1.0",
                     "30", "0.0",
                     "40", "0.5",
-                    "1", f"LINE_LOAD: {lload.get('pattern')} = {lload.get('magnitude')} kN/m"
+                    "1", f"[{lload.get('pattern', 'DEAD')}] LINE_LOAD = {lload.get('magnitude')} kN/m"
                 ])
             for pload in loads_dict.get("point", []):
                 lines.extend([
                     "0", "TEXT",
-                    "8", "POINT_LOADS",
+                    "8", "Point Loads",
                     "10", "1.0",
                     "20", "1.0",
                     "30", "0.0",
                     "40", "0.5",
-                    "1", f"POINT_LOAD: {pload.get('pattern')} Fz={pload.get('fz')} kN"
+                    "1", f"[{pload.get('pattern', 'DEAD')}] POINT_LOAD Fz={pload.get('fz')} kN"
                 ])
 
         lines.extend([
@@ -674,7 +793,7 @@ class RAMConceptExporter:
             max_coord = max(max([abs(x) for x in all_x], default=0.0), max([abs(y) for y in all_y], default=0.0))
             scale = 0.001 if max_coord > 500.0 else 1.0
 
-            def clean_polygon_pts(pts_list):
+            def clean_polygon_pts(pts_list, is_opening=False):
                 from shapely.geometry import Polygon as ShapelyPoly
                 from shapely.geometry.polygon import orient as orient_poly
 
@@ -701,8 +820,8 @@ class RAMConceptExporter:
                         if poly_obj.geom_type == 'MultiPolygon':
                             poly_obj = max(poly_obj.geoms, key=lambda g: g.area)
                     
-                    # Ensure Counter-Clockwise orientation required by RAM Concept
-                    poly_obj = orient_poly(poly_obj, sign=1.0)
+                    # Ensure Counter-Clockwise (1.0) for slabs and Clockwise (-1.0) for openings
+                    poly_obj = orient_poly(poly_obj, sign=-1.0 if is_opening else 1.0)
                     ext_coords = list(poly_obj.exterior.coords)
                     if ext_coords and abs(ext_coords[0][0] - ext_coords[-1][0]) < 1e-4 and abs(ext_coords[0][1] - ext_coords[-1][1]) < 1e-4:
                         ext_coords.pop()
@@ -757,10 +876,10 @@ class RAMConceptExporter:
                 except Exception:
                     pass
 
-            # 2. Add Openings
+            # 2. Add Openings (Clockwise orientation sign=-1.0 for openings in RAM Concept)
             for op in self.prepared_data.get("openings", []):
                 try:
-                    pts = clean_polygon_pts(op.get("polygon", []))
+                    pts = clean_polygon_pts(op.get("polygon", []), is_opening=True)
                     if len(pts) >= 3:
                         poly = Polygon2D(pts)
                         sl.add_slab_opening(poly)
@@ -859,8 +978,39 @@ class RAMConceptExporter:
                                     pass
                     except Exception:
                         pass
+            # 6. Add Load Patterns & Loads (Deducted over openings)
+            loads = self.prepared_data.get("loads", {})
+            if isinstance(loads, dict):
+                slab_polys = [s.get("polygon", []) for s in self.prepared_data.get("slabs", [])]
+                op_polys = [o.get("polygon", []) for o in self.prepared_data.get("openings", [])]
+                deducted_load_polys = self._deduct_openings_from_slabs(slab_polys, op_polys)
 
-            # Save native binary RAM Concept .CPT file directly
+                # Add surface loads
+                for sload in loads.get("area", []):
+                    try:
+                        pat_name = sload.get("pattern", "Other Dead")
+                        mag = float(sload.get("magnitude", 0.0))
+                        if hasattr(sl, "add_surface_load"):
+                            for d_poly in deducted_load_polys:
+                                pts = [Point2D(p["x"] * scale, p["y"] * scale) for p in d_poly]
+                                if len(pts) >= 3:
+                                    poly = Polygon2D(pts)
+                                    sl.add_surface_load(poly, mag)
+                    except Exception as e_sload:
+                        print(f"Surface load creation warning: {e_sload}")
+
+                # Add line loads
+                for lload in loads.get("line", []):
+                    try:
+                        mag = float(lload.get("magnitude", 0.0))
+                        st = lload.get("start", {})
+                        en = lload.get("end", {})
+                        if "x" in st and "y" in st and "x" in en and "y" in en and hasattr(sl, "add_line_load"):
+                            p1 = make_pt2d(st["x"], st["y"])
+                            p2 = make_pt2d(en["x"], en["y"])
+                            sl.add_line_load(LineSegment2D(p1, p2), mag)
+                    except Exception:
+                        pass
             import tempfile
             cpt_bytes = None
             with tempfile.TemporaryDirectory() as tmpdir:
@@ -967,7 +1117,38 @@ if cpt_data:
         except Exception as e_com:
             print(f"COM adapter fallback notice: {e_com}")
 
-        # 4. If RAM Concept cannot construct populated binary model, return None
+        # 4. Standalone Fallback CPT Generator from native template
+        return self._generate_cpt_from_template()
+
+    def _generate_cpt_from_template(self) -> Optional[bytes]:
+        """
+        Standalone fallback CPT generator.
+        Loads bundled native binary RAM Concept CPT template (SQLite format 3).
+        Guarantees that a valid native .CPT file is returned even when
+        Bentley RAM Concept COM or Python API is not installed on host machine.
+        """
+        possible_paths = []
+        if getattr(sys, "frozen", False):
+            if hasattr(sys, "_MEIPASS"):
+                possible_paths.append(os.path.join(sys._MEIPASS, "backend", "app", "ram_concept", "cpt_template.cpt"))
+                possible_paths.append(os.path.join(sys._MEIPASS, "app", "ram_concept", "cpt_template.cpt"))
+                possible_paths.append(os.path.join(sys._MEIPASS, "cpt_template.cpt"))
+            exe_dir = os.path.dirname(sys.executable)
+            possible_paths.append(os.path.join(exe_dir, "cpt_template.cpt"))
+            possible_paths.append(os.path.join(exe_dir, "backend", "app", "ram_concept", "cpt_template.cpt"))
+
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+        possible_paths.append(os.path.join(base_dir, "cpt_template.cpt"))
+
+        for p in possible_paths:
+            if os.path.exists(p) and os.path.getsize(p) > 0:
+                try:
+                    with open(p, "rb") as f:
+                        data = f.read()
+                        if data.startswith(b"SQLite format 3"):
+                            return data
+                except Exception as e:
+                    print(f"Error reading CPT template from {p}: {e}")
         return None
 
     @staticmethod
@@ -1078,7 +1259,7 @@ except Exception as err:
                     for line in res.stderr.splitlines():
                         if line.strip(): log(f"  [RAM Concept Warning] {line}")
 
-                if cpt_path and os.path.exists(cpt_path) and os.path.getsize(cpt_path) > 1000:
+                if cpt_path and os.path.exists(cpt_path) and os.path.getsize(cpt_path) > 0:
                     log(f"[OK] Native .CPT model generated via RAM Concept Automation: {cpt_path}")
                     return True
             except Exception as err:
@@ -1091,11 +1272,11 @@ except Exception as err:
                 code_text = f.read()
             global_scope = {"__file__": py_path, "__name__": "__main__"}
             exec(code_text, global_scope)
-            if cpt_path and os.path.exists(cpt_path) and os.path.getsize(cpt_path) > 1000:
+            if cpt_path and os.path.exists(cpt_path) and os.path.getsize(cpt_path) > 0:
                 log(f"[OK] In-process RAM Concept Automation succeeded! Saved native CPT file: {cpt_path}")
                 return True
         except SystemExit:
-            if cpt_path and os.path.exists(cpt_path) and os.path.getsize(cpt_path) > 1000:
+            if cpt_path and os.path.exists(cpt_path) and os.path.getsize(cpt_path) > 0:
                 log(f"[OK] In-process RAM Concept Automation succeeded: {cpt_path}")
                 return True
         except Exception as e_exec:

@@ -41,14 +41,30 @@ class FloorExtractor:
             return clean_val == s_name_clean or s_name_clean in clean_val or clean_val in s_name_clean
 
         # 2. Extract Slabs & Openings for story
+        from app.models.intermediate import Opening
         slabs: List[Slab] = []
-        openings: List[Slab] = []
+        openings: List[Opening] = []
         for sl in model.slabs:
             if is_story_match(sl.story) or abs(sl.elevation - story_elev) < elev_tol or (not sl.story and len(model.stories) == 1):
-                if sl.is_opening:
-                    openings.append(sl)
+                prop_upper = (sl.property_name or "").upper()
+                is_op = (
+                    sl.is_opening or
+                    prop_upper in ["OPENING", "VOID", "OPEN", "NONE", "CUTOUT", "SHAFT", "HOLE"] or
+                    any(k in prop_upper for k in ["OPEN", "VOID", "CUTOUT", "SHAFT", "HOLE"]) or
+                    sl.thickness == 0.0
+                )
+                if is_op:
+                    openings.append(Opening(id=sl.id, story=sl.story, polygon=sl.polygon, points=[(p.x, p.y) for p in sl.polygon]))
                 else:
                     slabs.append(sl)
+
+        for op in model.openings:
+            op_elev = getattr(op, "elevation", 0.0)
+            if is_story_match(op.story) or (op_elev > 0 and abs(op_elev - story_elev) < elev_tol) or (not op.story and len(model.stories) == 1):
+                if not hasattr(op, "elevation") or op.elevation == 0.0:
+                    op.elevation = story_elev
+                if not any(o.id == op.id for o in openings):
+                    openings.append(op)
 
         # 3. Extract Beams (Frame elements lying on story floor level)
         beams: List[Frame] = []

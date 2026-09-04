@@ -36,11 +36,25 @@ class FloorFilter:
             if min_elev <= node.z <= max_elev or (node.story and node.story in target_set)
         }
 
-        # 2. Filter Slabs
-        selected_slabs = [s for s in self.model.slabs if s.story in target_set]
-
-        # 3. Filter Openings
+        # 2. Filter Slabs & Openings
+        selected_slabs = []
         selected_openings = [op for op in self.model.openings if op.story in target_set]
+
+        for s in self.model.slabs:
+            if s.story in target_set:
+                prop_upper = (s.property_name or "").upper()
+                is_op = (
+                    s.is_opening or
+                    prop_upper in ["OPENING", "VOID", "OPEN", "NONE", "CUTOUT", "SHAFT", "HOLE"] or
+                    any(k in prop_upper for k in ["OPEN", "VOID", "CUTOUT", "SHAFT", "HOLE"]) or
+                    s.thickness == 0.0
+                )
+                if is_op:
+                    from app.models.intermediate import Opening
+                    if not any(o.id == s.id for o in selected_openings):
+                        selected_openings.append(Opening(id=s.id, story=s.story, polygon=s.polygon, points=[(p.x, p.y) for p in s.polygon]))
+                else:
+                    selected_slabs.append(s)
 
         # 4. Filter Walls
         # Include walls whose story is in selection or story_below is in selection

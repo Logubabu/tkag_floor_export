@@ -1,7 +1,10 @@
 import os
 import glob
 import sys
-import winreg
+try:
+    import winreg
+except ImportError:
+    winreg = None
 import importlib
 from typing import Dict, Any, Optional, Tuple
 
@@ -41,21 +44,22 @@ class RAMConceptDetector:
             if matches:
                 return matches[0]
 
-        # 3. Search Registry
-        registry_keys = [
-            (winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\Bentley\RAM Concept"),
-            (winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\WOW6432Node\Bentley\RAM Concept"),
-            (winreg.HKEY_CURRENT_USER, r"Software\Bentley\RAM Concept"),
-        ]
-        for root_key, sub_key in registry_keys:
-            try:
-                with winreg.OpenKey(root_key, sub_key) as key:
-                    install_path, _ = winreg.QueryValueEx(key, "InstallPath")
-                    exe_path = os.path.join(install_path, "Concept.exe")
-                    if os.path.exists(exe_path):
-                        return exe_path
-            except Exception:
-                pass
+        # 3. Search Registry (Windows only)
+        if winreg and sys.platform == "win32":
+            registry_keys = [
+                (winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\Bentley\RAM Concept"),
+                (winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\WOW6432Node\Bentley\RAM Concept"),
+                (winreg.HKEY_CURRENT_USER, r"Software\Bentley\RAM Concept"),
+            ]
+            for root_key, sub_key in registry_keys:
+                try:
+                    with winreg.OpenKey(root_key, sub_key) as key:
+                        install_path, _ = winreg.QueryValueEx(key, "InstallPath")
+                        exe_path = os.path.join(install_path, "Concept.exe")
+                        if os.path.exists(exe_path):
+                            return exe_path
+                except Exception:
+                    pass
 
         return None
 

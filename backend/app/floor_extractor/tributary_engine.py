@@ -127,9 +127,10 @@ class TributaryLoadPathEngine:
                 sup['P']['OW'] = sup['P'].get('OW', 0.0) + w_self
                 applied['OW'] = applied.get('OW', 0.0) + w_self
 
-            # 3. Floor area loads sampling
+            # 3. Floor area loads sampling with opening deduction
             story_slabs = [sl for sl in model.slabs if sl.story.lower() == story_name.lower()]
             real_slabs = [sl for sl in story_slabs if not sl.is_opening]
+            openings = [sl for sl in story_slabs if sl.is_opening] or [op for op in model.slabs if op.is_opening and op.story.lower() == story_name.lower()]
 
             if real_slabs:
                 minx, maxx = float('inf'), float('-inf')
@@ -148,20 +149,29 @@ class TributaryLoadPathEngine:
                 while x_curr < maxx:
                     y_curr = miny + res_mm / 2.0
                     while y_curr < maxy:
-                        hit_slab = None
-                        for sl in real_slabs:
-                            poly_pts = [(pt.x * 1000.0, pt.y * 1000.0) for pt in sl.polygon]
-                            if cls.in_polygon(x_curr, y_curr, poly_pts):
-                                hit_slab = sl
+                        # Check opening deduction
+                        in_opening = False
+                        for op in openings:
+                            op_pts = [(pt.x * 1000.0, pt.y * 1000.0) for pt in op.polygon]
+                            if cls.in_polygon(x_curr, y_curr, op_pts):
+                                in_opening = True
                                 break
-                        if hit_slab:
-                            sup_idx = cls.nearest_support(supports, x_curr, y_curr)
-                            ow_val = (hit_slab.thickness * 1000.0 if hit_slab.thickness < 10 else hit_slab.thickness) * density * cell_area
-                            applied['OW'] = applied.get('OW', 0.0) + ow_val
-                            if sup_idx >= 0:
-                                supports[sup_idx]['P']['OW'] = supports[sup_idx]['P'].get('OW', 0.0) + ow_val
-                            else:
-                                unassigned += ow_val
+
+                        if not in_opening:
+                            hit_slab = None
+                            for sl in real_slabs:
+                                poly_pts = [(pt.x * 1000.0, pt.y * 1000.0) for pt in sl.polygon]
+                                if cls.in_polygon(x_curr, y_curr, poly_pts):
+                                    hit_slab = sl
+                                    break
+                            if hit_slab:
+                                sup_idx = cls.nearest_support(supports, x_curr, y_curr)
+                                ow_val = (hit_slab.thickness * 1000.0 if hit_slab.thickness < 10 else hit_slab.thickness) * density * cell_area
+                                applied['OW'] = applied.get('OW', 0.0) + ow_val
+                                if sup_idx >= 0:
+                                    supports[sup_idx]['P']['OW'] = supports[sup_idx]['P'].get('OW', 0.0) + ow_val
+                                else:
+                                    unassigned += ow_val
 
                         y_curr += res_mm
                     x_curr += res_mm

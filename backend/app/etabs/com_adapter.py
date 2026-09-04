@@ -265,23 +265,37 @@ class ETABSCOMAdapter:
                     if pt_res and pt_res[0] == 0:
                         pt_ids = pt_res[2] if len(pt_res) > 2 else pt_res[1]
                         prop_name = prop_res[1] if prop_res and prop_res[0] == 0 else "SLAB"
-                        is_opening = prop_name.upper() in ["OPENING", "VOID", "OPEN"]
+                        prop_upper = prop_name.upper()
                         
+                        is_op_api = False
+                        try:
+                            op_res = self.SapModel.AreaObj.GetOpening(a_name)
+                            if op_res and op_res[0] == 0:
+                                is_op_api = bool(op_res[1])
+                        except Exception:
+                            pass
+
+                        is_opening = (
+                            is_op_api or
+                            prop_upper in ["OPENING", "VOID", "OPEN", "NONE", "CUTOUT", "SHAFT", "HOLE"] or
+                            any(k in prop_upper for k in ["OPEN", "VOID", "CUTOUT", "SHAFT", "HOLE"])
+                        )
+
                         polygon: List[Point2D] = []
                         z_elev = 0.0
                         assigned_story = "Level 1"
-                        
+
                         for pid in pt_ids:
                             nd = b_model.nodes.get(pid)
                             if nd:
                                 polygon.append(Point2D(x=nd.x, y=nd.y))
                                 z_elev = nd.z
-                        
+
                         for st in b_model.stories:
                             if abs(st.elevation - z_elev) < 0.1:
                                 assigned_story = st.name
                                 break
-                        
+
                         if "WALL" in prop_name.upper() or a_name.startswith("W"):
                             b_model.walls.append(Wall(
                                 id=a_name,
@@ -290,6 +304,14 @@ class ETABSCOMAdapter:
                                 thickness=0.3,
                                 property_name=prop_name
                             ))
+                        elif is_opening:
+                            from app.models.intermediate import Opening
+                            b_model.openings.append(Opening(
+                                id=a_name,
+                                story=assigned_story,
+                                polygon=polygon,
+                                points=[(p.x, p.y) for p in polygon]
+                            ))
                         else:
                             b_model.slabs.append(Slab(
                                 id=a_name,
@@ -297,7 +319,7 @@ class ETABSCOMAdapter:
                                 polygon=polygon,
                                 thickness=0.25,
                                 property_name=prop_name,
-                                is_opening=is_opening,
+                                is_opening=False,
                                 elevation=z_elev
                             ))
         except Exception as e:
